@@ -318,7 +318,7 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <section className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           <MetricCard
             label="Visible products"
             value={String(filteredProducts.length)}
@@ -383,16 +383,12 @@ export default function HomePage() {
                     </div>
 
                     <div className="mt-4 grid grid-cols-2 gap-3">
-                      <StatPill label="Demand" value={orderLabel} />
-                      
-                       
-                      
-                         
-                        
-                        
-                     
-                    </div>
-
+  <StatPill label="Demand" value={orderLabel} />
+  <StatPill
+    label="Release"
+    value={product.rawDate || "No date"}
+  />
+</div>
                     <div className="mt-4 flex items-center justify-between">
                       <div className="min-w-0 pr-3">
                         <div className="truncate text-[11px] uppercase tracking-[0.22em] text-slate-500">
