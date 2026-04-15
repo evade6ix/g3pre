@@ -452,22 +452,22 @@ const shippingCount = useMemo(() => {
                 <div className="border-b border-slate-700/60 px-6 py-6">
                   <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
                     <DrawerMetricCard
-                      label="Order count"
-                      value={orders.length.toString()}
-                    />
-                    <DrawerMetricCard
-                      label="Total units"
-                      value={drawerTotalUnits.toString()}
-                    />
-                    <DrawerMetricCard
-                      label="Shipping"
-                      value={shippingCount.toString()}
-                    />
-                    <DrawerMetricCard
-                      label="Pickup"
-                      value={pickupCount.toString()}
-                    />
-                  </div>
+    label="Total units"
+    value={drawerTotalUnits.toString()}
+  />
+  <DrawerMetricCard
+    label="Order count"
+    value={orders.length.toString()}
+  />
+  <DrawerMetricCard
+    label="Shipping"
+    value={shippingCount.toString()}
+  />
+  <DrawerMetricCard
+    label="Pickup"
+    value={pickupCount.toString()}
+  />
+</div>
 
                   <div className="mt-4">
                     <DrawerMetricCard
