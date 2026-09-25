@@ -8,6 +8,9 @@ type ProductOrder = {
   date: string;
   quantity: number;
   fulfillmentMethod: string;
+  customerName?: string | null;
+  customerEmail?: string | null;
+  shippingAddress?: { name: string | null; address1: string | null; address2: string | null; city: string | null; province: string | null; zip: string | null; country: string | null } | null;
   items: { title?: string | null; variantTitle?: string | null; sku?: string | null; quantity?: number | null; image?: string | null }[];
 };
 type Address = { name: string | null; company: string | null; address1: string | null; address2: string | null; city: string | null; province: string | null; zip: string | null; country: string | null; phone: string | null };
@@ -20,6 +23,20 @@ type Detail = {
   fulfillmentOrders: { nodes: { status: string; deliveryMethod: { methodType: string } | null; supportedActions: { action: string }[] }[]; pageInfo: { hasNextPage: boolean } };
 };
 
+function shippingGroups(orders: ProductOrder[]): ProductOrder[][] {
+  const groups = new Map<string, ProductOrder[]>();
+  for (const order of orders) {
+    const name = order.customerName?.trim().toLowerCase();
+    const address = order.shippingAddress;
+    const destination = address && [address.address1, address.address2, address.city, address.province, address.zip, address.country]
+      .map((part) => (part || "").trim().toLowerCase()).join("|");
+    // A matching name alone is not enough to assume two orders share a package.
+    const key = name && address?.address1 && address?.zip ? `${name}|${destination}` : `order:${order.orderId}`;
+    groups.set(key, [...(groups.get(key) || []), order]);
+  }
+  return [...groups.values()];
+}
+
 export default function BatchOrderWorkspace({ productTitle, method, orders, onBack, onUpdated, onProcessed }: {
   productTitle: string;
   method: "pickup" | "shipping";
@@ -28,13 +45,56 @@ export default function BatchOrderWorkspace({ productTitle, method, orders, onBa
   onUpdated: () => Promise<void>;
   onProcessed: (orderId: string) => void;
 }) {
+  const groups = method === "shipping" ? shippingGroups(orders) : orders.map((order) => [order]);
   return <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b1220] text-slate-100" role="dialog" aria-modal="true" aria-label={`${method} orders for ${productTitle}`}>
     <div className="mx-auto max-w-5xl px-5 pb-24 pt-7 md:px-9">
       <button onClick={onBack} className="mb-8 text-sm font-medium text-slate-400 hover:text-white">← Back to {productTitle} orders</button>
       <div className="mb-8 border-b border-white/10 pb-7"><p className="text-xs font-bold uppercase tracking-[.2em] text-cyan-300">Product fulfillment queue</p><h2 className="mt-2 text-3xl font-semibold text-white md:text-4xl">{method === "pickup" ? "All pickups" : "All shipments"}</h2><p className="mt-3 text-sm text-slate-400">{productTitle} · {orders.length} {orders.length === 1 ? "order" : "orders"}. Work down the page; each action updates that order in Shopify.</p></div>
-      {orders.length ? <div className="space-y-5">{orders.map((order, index) => <BatchCard key={order.orderId} order={order} method={method} index={index + 1} total={orders.length} onUpdated={onUpdated} onProcessed={onProcessed} />)}</div> : <div className="rounded-2xl border border-white/10 bg-[#151e2c] p-12 text-center text-sm text-slate-400">No {method === "pickup" ? "pickup" : "shipping"} orders for this product.</div>}
+      {orders.length ? <div className="space-y-5">{groups.map((group, index) => group.length > 1 ? <CombinedShipment key={group[0].orderId} orders={group} onUpdated={onUpdated} onProcessed={onProcessed} /> : <BatchCard key={group[0].orderId} order={group[0]} method={method} index={index + 1} total={groups.length} onUpdated={onUpdated} onProcessed={onProcessed} />)}</div> : <div className="rounded-2xl border border-white/10 bg-[#151e2c] p-12 text-center text-sm text-slate-400">No {method === "pickup" ? "pickup" : "shipping"} orders for this product.</div>}
     </div>
   </div>;
+}
+
+function CombinedShipment({ orders, onUpdated, onProcessed }: { orders: ProductOrder[]; onUpdated: () => Promise<void>; onProcessed: (orderId: string) => void }) {
+  const [carrier, setCarrier] = useState("");
+  const [trackingNumber, setTrackingNumber] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [completed, setCompleted] = useState<string[]>([]);
+  const [error, setError] = useState("");
+  const [warning, setWarning] = useState("");
+  const remaining = orders.filter((order) => !completed.includes(order.orderId));
+  const address = orders[0].shippingAddress;
+
+  async function shipTogether() {
+    if (busy || !trackingNumber.trim() || !remaining.length) return;
+    setBusy(true);
+    setError("");
+    setWarning("");
+    for (const order of remaining) {
+      try {
+        const response = await fetch(`/api/orders/${order.orderId}`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "ship", carrier, trackingNumber }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Shopify could not ship this order");
+        setCompleted((previous) => [...previous, order.orderId]);
+        onProcessed(order.orderId);
+        if (data.warning) setWarning(data.warning);
+      } catch (cause) {
+        setError(`${order.orderName} failed: ${cause instanceof Error ? cause.message : "Shopify could not ship this order"}. Orders marked shipped above were already updated. Check the package before retrying.`);
+        break;
+      }
+    }
+    setBusy(false);
+    void onUpdated();
+  }
+
+  return <section className="rounded-2xl border border-cyan-300/30 bg-[#151e2c] p-5 shadow-[0_12px_40px_rgba(0,0,0,.15)] md:p-7">
+    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-5"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-cyan-300">Combine into one package · {orders.length} Shopify orders</p><h3 className="mt-2 text-2xl font-semibold text-white">{orders[0].customerName}</h3><p className="mt-2 text-sm text-slate-300">{orders.map((order) => order.orderName).join(" · ")}</p></div><span className="rounded-full bg-cyan-300/10 px-3 py-1 text-xs font-semibold text-cyan-200">Same name & destination</span></div>
+    <div className="grid gap-6 py-6 md:grid-cols-2"><div><p className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Ship to</p><p className="text-sm text-slate-200">{address?.name}<br />{[address?.address1, address?.address2].filter(Boolean).join(", ")}<br />{[address?.city, address?.province, address?.zip].filter(Boolean).join(", ")}<br />{address?.country}</p><p className="mt-3 text-sm text-slate-400">{orders[0].customerEmail}</p></div><div><p className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Pack every order</p>{orders.map((order) => <div key={order.orderId} className="mb-3 rounded-xl bg-white/5 p-3"><p className="mb-2 font-semibold text-white">{order.orderName} {completed.includes(order.orderId) && <span className="text-sm text-emerald-300">✓ Shipped</span>}</p>{order.items.map((item, index) => <p key={index} className="text-sm text-slate-300">{item.quantity} × {item.title}{item.variantTitle ? ` — ${item.variantTitle}` : ""}</p>)}</div>)}</div></div>
+    <div className="border-t border-white/10 pt-5"><p className="mb-4 text-sm text-slate-400">Pack these orders together. Shopify keeps their order numbers separate; the same tracking number will be saved to each one.</p><div className="flex flex-wrap items-end gap-3"><label className="text-xs font-medium text-slate-400">Carrier (optional)<input value={carrier} onChange={(event) => setCarrier(event.target.value)} placeholder="FedEx, Canada Post…" className="mt-2 block w-44 rounded-xl border border-white/10 bg-[#0b1220] px-3 py-3 text-sm text-white outline-none focus:border-cyan-300" /></label><label className="min-w-48 flex-1 text-xs font-medium text-slate-400">Tracking number<input value={trackingNumber} onChange={(event) => setTrackingNumber(event.target.value)} placeholder="One number for this package" className="mt-2 block w-full rounded-xl border border-white/10 bg-[#0b1220] px-3 py-3 text-sm text-white outline-none focus:border-cyan-300" /></label><button disabled={busy || !trackingNumber.trim() || !remaining.length} onClick={() => void shipTogether()} className="rounded-xl bg-cyan-300 px-5 py-3 text-sm font-bold text-[#0b1220] disabled:opacity-50">{busy ? "Updating Shopify…" : remaining.length ? `Mark ${remaining.length} ${remaining.length === 1 ? "order" : "orders"} shipped` : "All orders shipped"}</button></div>{error && <p className="mt-4 rounded-xl bg-rose-400/10 p-3 text-sm text-rose-200">{error}</p>}{warning && <p className="mt-4 rounded-xl bg-amber-400/10 p-3 text-sm text-amber-200">{warning}</p>}</div>
+  </section>;
 }
 
 function BatchCard({ order, method, index, total, onUpdated, onProcessed }: { order: ProductOrder; method: "pickup" | "shipping"; index: number; total: number; onUpdated: () => Promise<void>; onProcessed: (orderId: string) => void }) {

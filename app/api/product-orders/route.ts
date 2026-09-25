@@ -53,6 +53,9 @@ export async function GET(req: Request) {
       adminUrl: string | null;
       fulfillmentMethod: "shipping" | "pickup";
       shippingMethodLabel: string | null;
+      customerName: string | null;
+      customerEmail: string | null;
+      shippingAddress: OrderNode["shippingAddress"];
       items: Array<{
         title: string | null;
         variantTitle: string | null;
@@ -86,6 +89,9 @@ export async function GET(req: Request) {
               : null,
           fulfillmentMethod: delivery.fulfillmentMethod,
           shippingMethodLabel: delivery.shippingMethodLabel,
+          customerName: order.shippingAddress?.name || order.billingAddress?.name || null,
+          customerEmail: order.email,
+          shippingAddress: order.shippingAddress,
           items: order.lineItems.edges.map(({ node }) => ({
             title: node.title || null,
             variantTitle: node.variantTitle || null,
