@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { shopifyAdminFetch } from "../../../lib/shopify";
 import { env } from "../../../lib/env";
+import { getUnfulfilledOrders } from "../../../lib/orders";
 
 type ProductNode = {
   id: string;
@@ -14,21 +15,6 @@ type ProductNode = {
   };
 };
 
-type OrderNode = {
-  id: string;
-  name: string;
-  lineItems: {
-    edges: {
-      node: {
-        quantity: number;
-        product?: {
-          id: string;
-        };
-      };
-    }[];
-  };
-};
-
 type CollectionResponse = {
   collection: {
     products: {
@@ -36,18 +22,6 @@ type CollectionResponse = {
         node: ProductNode;
       }[];
     };
-  };
-};
-
-type OrdersPageResponse = {
-  orders: {
-    pageInfo: {
-      hasNextPage: boolean;
-      endCursor: string | null;
-    };
-    edges: {
-      node: OrderNode;
-    }[];
   };
 };
 
@@ -66,74 +40,6 @@ function parseReleaseDate(dateStr: string | null): Date | null {
   }
 
   return parsed;
-}
-
-async function fetchAllUnfulfilledOrders() {
-  let hasNextPage = true;
-  let cursor: string | null = null;
-  let pageCount = 0;
-  const allOrders: OrderNode[] = [];
-
-  while (hasNextPage) {
-    pageCount += 1;
-
-    // safety stop so it never hangs forever
-    if (pageCount > 20) {
-      break;
-    }
-
-    const ordersQuery = `
-      query GetOrders($cursor: String) {
-        orders(
-          first: 100
-          after: $cursor
-          query: "fulfillment_status:unfulfilled"
-          sortKey: CREATED_AT
-          reverse: true
-        ) {
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-          edges {
-            node {
-              id
-              name
-              lineItems(first: 50) {
-                edges {
-                  node {
-                    quantity
-                    product {
-                      id
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    `;
-
-    const ordersData = (await shopifyAdminFetch(
-      ordersQuery,
-      { cursor }
-    )) as OrdersPageResponse;
-
-    for (const edge of ordersData.orders.edges) {
-      allOrders.push(edge.node);
-    }
-
-    hasNextPage = ordersData.orders.pageInfo.hasNextPage;
-    cursor = ordersData.orders.pageInfo.endCursor;
-
-    // extra safety: stop if Shopify returns no cursor
-    if (hasNextPage && !cursor) {
-      break;
-    }
-  }
-
-  return allOrders;
 }
 
 export async function GET() {
@@ -163,13 +69,12 @@ export async function GET() {
       }
     `;
 
-    const collectionData = (await shopifyAdminFetch(
-  collectionQuery,
-  {
-    id: `gid://shopify/Collection/${env.preorderCollectionId}`,
-  }
-)) as CollectionResponse;
-    const allOrders = await fetchAllUnfulfilledOrders();
+    const [collectionData, allOrders] = await Promise.all([
+      shopifyAdminFetch<CollectionResponse>(collectionQuery, {
+        id: `gid://shopify/Collection/${env.preorderCollectionId}`,
+      }),
+      getUnfulfilledOrders(),
+    ]);
     const now = new Date();
 
     const orderMap: Record<string, number> = {};

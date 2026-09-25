@@ -1,52 +1,5 @@
 import { NextResponse } from "next/server";
-import { shopifyAdminFetch } from "../../../lib/shopify";
-
-type OrderLineItemNode = {
-  quantity: number;
-  title?: string | null;
-  variantTitle?: string | null;
-  image?: {
-    url: string;
-  } | null;
-  variant?: {
-    sku?: string | null;
-    image?: {
-      url: string;
-    } | null;
-  } | null;
-  product?: {
-    id: string;
-  } | null;
-};
-
-type OrderNode = {
-  id: string;
-  legacyResourceId: string;
-  name: string;
-  createdAt: string;
-  shippingLine?: {
-    title?: string | null;
-    code?: string | null;
-    deliveryCategory?: string | null;
-  } | null;
-  lineItems: {
-    edges: {
-      node: OrderLineItemNode;
-    }[];
-  };
-};
-
-type OrdersPageResponse = {
-  orders: {
-    pageInfo: {
-      hasNextPage: boolean;
-      endCursor: string | null;
-    };
-    edges: {
-      node: OrderNode;
-    }[];
-  };
-};
+import { getUnfulfilledOrders, type OrderNode } from "../../../lib/orders";
 
 function getDeliveryInfo(order: OrderNode): {
   fulfillmentMethod: "shipping" | "pickup";
@@ -77,89 +30,6 @@ function getDeliveryInfo(order: OrderNode): {
     shippingMethodLabel: isPickup ? "In-Store Pickup" : title || code || category || "Shipping",
   };
 }
-async function fetchAllUnfulfilledOrders(): Promise<OrderNode[]> {
-  let hasNextPage = true;
-  let cursor: string | null = null;
-  let pageCount = 0;
-  const allOrders: OrderNode[] = [];
-
-  while (hasNextPage) {
-    pageCount += 1;
-
-    if (pageCount > 20) {
-      break;
-    }
-
-    const query = `
-      query GetOrders($cursor: String) {
-        orders(
-          first: 100
-          after: $cursor
-          query: "fulfillment_status:unfulfilled"
-          sortKey: CREATED_AT
-          reverse: true
-        ) {
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-          edges {
-            node {
-              id
-              legacyResourceId
-              name
-              createdAt
-              shippingLine {
-                title
-                code
-                deliveryCategory
-              }
-              lineItems(first: 100) {
-                edges {
-                  node {
-                    quantity
-                    title
-                    variantTitle
-                    image {
-                      url
-                    }
-                    variant {
-                      sku
-                      image {
-                        url
-                      }
-                    }
-                    product {
-                      id
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    `;
-
-    const data = (await shopifyAdminFetch(query, {
-      cursor,
-    })) as OrdersPageResponse;
-
-    for (const edge of data.orders.edges) {
-      allOrders.push(edge.node);
-    }
-
-    hasNextPage = data.orders.pageInfo.hasNextPage;
-    cursor = data.orders.pageInfo.endCursor;
-
-    if (hasNextPage && !cursor) {
-      break;
-    }
-  }
-
-  return allOrders;
-}
-
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
@@ -172,7 +42,7 @@ export async function GET(req: Request) {
       );
     }
 
-    const allOrders = await fetchAllUnfulfilledOrders();
+    const allOrders = await getUnfulfilledOrders();
     const shopDomain = process.env.SHOPIFY_STORE_DOMAIN;
 
     const results: Array<{
