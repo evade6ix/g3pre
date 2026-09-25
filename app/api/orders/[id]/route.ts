@@ -1,6 +1,7 @@
 import { revalidateTag } from "next/cache";
 import { NextResponse } from "next/server";
 import { shopifyAdminFetch } from "../../../../lib/shopify";
+import { READY_FOR_PICKUP_TAG } from "../../../../lib/orders";
 
 type FulfillmentOrder = {
   id: string;
@@ -78,6 +79,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const order = await loadOrder(id);
     if (!order) return NextResponse.json({ ok: false, error: "Order not found" }, { status: 404 });
     if (order.cancelledAt) return NextResponse.json({ ok: false, error: "This order was cancelled in Shopify." }, { status: 409 });
+    if (order.tags.includes(READY_FOR_PICKUP_TAG)) {
+      return NextResponse.json({ ok: false, error: "This order is already ready for pickup in the app." }, { status: 409 });
+    }
     if (order.fulfillmentOrders.pageInfo.hasNextPage) {
       return NextResponse.json({ ok: false, error: "This order has too many fulfillment groups. Open it in Shopify." }, { status: 409 });
     }
@@ -96,6 +100,23 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       }`, { input: { lineItemsByFulfillmentOrder: pickup.map((fo) => ({ fulfillmentOrderId: fo.id })) } });
       const errors = result.fulfillmentOrderLineItemsPreparedForPickup.userErrors;
       if (errors.length) return NextResponse.json({ ok: false, error: errors.map((e) => e.message).join("; ") }, { status: 422 });
+
+      // Pickup readiness alone leaves Shopify's order unfulfilled. The order tag
+      // keeps it out of every product queue, including on other devices.
+      let markerWarning: string | null = null;
+      try {
+        const tagged = await shopifyAdminFetch<{
+          tagsAdd: { userErrors: { message: string }[] };
+        }>(`mutation MarkAppPickupReady($id: ID!, $tags: [String!]!) {
+          tagsAdd(id: $id, tags: $tags) { userErrors { field message } }
+        }`, { id, tags: [READY_FOR_PICKUP_TAG] });
+        if (tagged.tagsAdd.userErrors.length) markerWarning = tagged.tagsAdd.userErrors.map((e) => e.message).join("; ");
+      } catch (error) {
+        markerWarning = error instanceof Error ? error.message : "Could not save the pickup queue marker";
+      }
+
+      revalidateTag("g3pre-orders", { expire: 0 });
+      return NextResponse.json({ ok: true, order: (await loadOrder(id).catch(() => null)) || order, warning: markerWarning ? `Shopify marked this order ready, but the app could not keep it hidden on other devices: ${markerWarning}. Grant write_orders to the app.` : null });
     } else if (body.action === "ship") {
       const trackingNumber = typeof body.trackingNumber === "string" ? body.trackingNumber.trim() : "";
       const carrier = typeof body.carrier === "string" ? body.carrier.trim() : "";
@@ -124,7 +145,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }
 
     revalidateTag("g3pre-orders", { expire: 0 });
-    return NextResponse.json({ ok: true, order: await loadOrder(id) });
+    return NextResponse.json({ ok: true, order: (await loadOrder(id).catch(() => null)) || order });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Shopify could not update this order" }, { status: 500 });
   }

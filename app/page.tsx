@@ -27,6 +27,9 @@ export default function HomePage() {
   const [detailError, setDetailError] = useState("");
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [batchMethod, setBatchMethod] = useState<"pickup" | "shipping" | null>(null);
+  const [batchOrders, setBatchOrders] = useState<ProductOrder[]>([]);
+  const [processedOrderIds, setProcessedOrderIds] = useState<Set<string>>(new Set());
+  const [actionWarning, setActionWarning] = useState("");
   const [productOrders, setProductOrders] = useState<ProductOrder[]>([]);
   const [productLoading, setProductLoading] = useState(false);
   const [trackingNumber, setTrackingNumber] = useState("");
@@ -53,14 +56,41 @@ export default function HomePage() {
 
   useEffect(() => { void refresh(); }, []);
 
+  useEffect(() => {
+    const sync = () => {
+      if (document.visibilityState !== "visible") return;
+      void refresh();
+      if (selectedProduct && !batchMethod) void reloadProductOrders(selectedProduct.id);
+    };
+    const timer = window.setInterval(sync, 20_000);
+    window.addEventListener("focus", sync);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", sync); };
+  }, [selectedProduct?.id, batchMethod]);
+
+  function markProcessed(orderId: string) {
+    setProcessedOrderIds((previous) => new Set(previous).add(orderId));
+  }
+
+  function openBatch(method: "pickup" | "shipping") {
+    setBatchOrders(productOrders.filter((order) => order.fulfillmentMethod === method && !processedOrderIds.has(order.orderId)));
+    setBatchMethod(method);
+  }
+
   const preorderIds = useMemo(() => new Set(products.map((p) => p.id)), [products]);
-  const preorderOrders = useMemo(() => orders.filter((order) => order.items.some((item) => item.productId && preorderIds.has(item.productId))), [orders, preorderIds]);
+  const preorderOrders = useMemo(() => orders.filter((order) => !processedOrderIds.has(order.legacyResourceId) && order.items.some((item) => item.productId && preorderIds.has(item.productId))), [orders, preorderIds, processedOrderIds]);
   const visibleOrders = useMemo(() => preorderOrders.filter((order) => {
     const q = search.trim().toLowerCase();
     return (filter === "all" || filter === order.fulfillmentMethod) &&
       (!q || order.name.toLowerCase().includes(q) || order.items.some((item) => `${item.title} ${item.sku || ""}`.toLowerCase().includes(q)));
   }), [preorderOrders, search, filter]);
-  const visibleProducts = useMemo(() => products.filter((p) => `${p.title} ${p.handle} ${p.rawDate || ""}`.toLowerCase().includes(search.trim().toLowerCase())), [products, search]);
+  const visibleProducts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const order of preorderOrders) for (const item of order.items) {
+      if (item.productId) counts.set(item.productId, (counts.get(item.productId) || 0) + item.quantity);
+    }
+    return products.filter((p) => `${p.title} ${p.handle} ${p.rawDate || ""}`.toLowerCase().includes(search.trim().toLowerCase()))
+      .map((p) => ({ ...p, orderCount: counts.get(p.id) || 0 }));
+  }, [products, preorderOrders, search]);
   const pickupCount = preorderOrders.filter((o) => o.fulfillmentMethod === "pickup").length;
   const unitCount = preorderOrders.reduce((sum, o) => sum + o.items.filter((item) => item.productId && preorderIds.has(item.productId)).reduce((n, item) => n + item.quantity, 0), 0);
 
@@ -70,6 +100,7 @@ export default function HomePage() {
     setDetail(null);
     setDetailError("");
     setSuccess("");
+    setActionWarning("");
     setTrackingNumber("");
     setCarrier("");
     setDetailLoading(true);
@@ -127,6 +158,8 @@ export default function HomePage() {
       if (!response.ok || !data.ok) throw new Error(data.error || "Shopify could not update this order");
       setDetail(data.order);
       setSuccess(action === "ship" ? "Shipment created in Shopify. The customer was notified." : "Marked ready for pickup in Shopify. The customer was notified.");
+      setActionWarning(data.warning || "");
+      markProcessed(selectedOrder.legacyResourceId);
       await refresh();
       if (selectedProduct) await reloadProductOrders(selectedProduct.id);
     } catch (cause) {
@@ -180,6 +213,7 @@ export default function HomePage() {
           <div className="mb-8 flex flex-wrap items-start justify-between gap-5"><div><p className="text-xs font-bold uppercase tracking-[.2em] text-cyan-300">Order workspace</p><h2 className="mt-2 text-4xl font-semibold tracking-tight text-white">{selectedOrder.name}</h2><p className="mt-2 text-sm text-slate-400">Placed {formatDate(selectedOrder.createdAt)} · {selectedOrder.shippingMethod}</p></div><a href={selectedOrder.adminUrl} target="_blank" rel="noreferrer" className="rounded-xl border border-white/15 px-4 py-2.5 text-sm text-slate-200 hover:bg-white/10">Open in Shopify ↗</a></div>
           {detailError && <div className="mb-5 rounded-xl border border-rose-400/30 bg-rose-400/10 p-4 text-sm text-rose-200">{detailError}</div>}
           {success && <div className="mb-5 rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-sm text-emerald-200">✓ {success}</div>}
+          {actionWarning && <div className="mb-5 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-200">{actionWarning}</div>}
           {detailLoading ? <div className={`${surface} p-10 text-slate-400`}>Loading customer and fulfillment details…</div> : <div className="grid gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]">
             <div className="space-y-5"><section className={`${surface} p-6`}><SectionTitle eyebrow="Items to fulfill" title={`${selectedOrder.items.reduce((n, item) => n + item.quantity, 0)} units in this order`} /><div className="mt-5 divide-y divide-white/10">{selectedOrder.items.map((item, index) => <div key={index} className="flex gap-4 py-4"><img src={item.image || "/favicon.ico"} alt="" className="h-16 w-16 rounded-lg bg-white/5 object-cover" /><div className="min-w-0 flex-1"><p className="font-medium text-white">{item.title}</p><p className="mt-1 text-sm text-slate-400">{item.variantTitle || "Default variant"}{item.sku ? ` · SKU ${item.sku}` : ""}</p></div><span className="font-semibold text-cyan-300">× {item.quantity}</span></div>)}</div></section>
               <section className={`${surface} p-6`}><SectionTitle eyebrow="Fulfillment" title="Next action" />{!detail ? <p className="mt-4 text-sm text-slate-400">Order details are unavailable. You can manage it in Shopify.</p> : canPickup ? <div className="mt-5"><p className="mb-5 text-sm leading-6 text-slate-400">Items are ready at the counter? Marking them ready updates Shopify and sends its ready-for-pickup notification.</p><button disabled={submitting} onClick={() => void performAction("ready_for_pickup")} className="rounded-xl bg-cyan-300 px-5 py-3 text-sm font-bold text-[#0b1220] hover:bg-cyan-200 disabled:opacity-50">{submitting ? "Updating Shopify…" : "Mark ready for pickup"}</button></div> : canShip ? <div className="mt-5 space-y-4"><p className="text-sm leading-6 text-slate-400">Create the fulfillment in Shopify and email the tracking details to the customer.</p><div className="grid gap-3 sm:grid-cols-2"><label className="text-xs font-medium text-slate-400">Carrier (optional)<input value={carrier} onChange={(e) => setCarrier(e.target.value)} placeholder="FedEx, Canada Post…" className="mt-2 w-full rounded-xl border border-white/10 bg-[#0b1220] px-4 py-3 text-sm text-white outline-none focus:border-cyan-300" /></label><label className="text-xs font-medium text-slate-400">Tracking number<input value={trackingNumber} onChange={(e) => setTrackingNumber(e.target.value)} placeholder="Enter tracking number" className="mt-2 w-full rounded-xl border border-white/10 bg-[#0b1220] px-4 py-3 text-sm text-white outline-none focus:border-cyan-300" /></label></div><button disabled={submitting || !trackingNumber.trim()} onClick={() => void performAction("ship")} className="rounded-xl bg-cyan-300 px-5 py-3 text-sm font-bold text-[#0b1220] hover:bg-cyan-200 disabled:opacity-50">{submitting ? "Updating Shopify…" : "Mark shipped & notify customer"}</button></div> : <p className="mt-4 text-sm leading-6 text-slate-400">{openFulfillments.length ? "This order has multiple locations, a different delivery method, or a fulfillment hold. Complete it in Shopify." : "There are no open fulfillments for this order. It may already be ready, shipped, or fulfilled."}</p>}</section></div>
@@ -192,15 +226,15 @@ export default function HomePage() {
         <button aria-label="Close product panel" onClick={() => setSelectedProduct(null)} className="flex-1" />
         <aside className="h-full w-full max-w-[680px] overflow-y-auto border-l border-white/10 bg-[#111a28] p-6 shadow-2xl md:p-8">
           <button onClick={() => setSelectedProduct(null)} className="mb-7 text-sm text-slate-400 hover:text-white">← Close panel</button>
-          <div className="flex gap-5"><img src={selectedProduct.image || "/favicon.ico"} alt="" className="h-24 w-24 rounded-xl object-cover" /><div><p className="text-xs font-bold uppercase tracking-[.2em] text-cyan-300">Product / Open orders</p><h2 className="mt-2 text-2xl font-semibold text-white">{selectedProduct.title}</h2><p className="mt-2 text-sm text-slate-400">{selectedProduct.rawDate || "Release date TBA"} · {selectedProduct.orderCount} units</p></div></div>
+          <div className="flex gap-5"><img src={selectedProduct.image || "/favicon.ico"} alt="" className="h-24 w-24 rounded-xl object-cover" /><div><p className="text-xs font-bold uppercase tracking-[.2em] text-cyan-300">Product / Open orders</p><h2 className="mt-2 text-2xl font-semibold text-white">{selectedProduct.title}</h2><p className="mt-2 text-sm text-slate-400">{selectedProduct.rawDate || "Release date TBA"} · {preorderOrders.reduce((total, order) => total + order.items.filter((item) => item.productId === selectedProduct.id).reduce((sum, item) => sum + item.quantity, 0), 0)} units</p></div></div>
           <div className="mt-8 grid gap-3 border-t border-white/10 pt-6 sm:grid-cols-2">
-            <button onClick={() => setBatchMethod("pickup")} disabled={productLoading} className="rounded-xl border border-amber-300/20 bg-amber-300/10 p-4 text-left transition hover:bg-amber-300/15 disabled:opacity-50"><span className="block text-sm font-semibold text-amber-100">View all pickups →</span><span className="mt-1 block text-xs text-amber-200/65">{productOrders.filter((order) => order.fulfillmentMethod === "pickup").length} orders · scroll and prepare</span></button>
-            <button onClick={() => setBatchMethod("shipping")} disabled={productLoading} className="rounded-xl border border-sky-300/20 bg-sky-300/10 p-4 text-left transition hover:bg-sky-300/15 disabled:opacity-50"><span className="block text-sm font-semibold text-sky-100">View all shipping →</span><span className="mt-1 block text-xs text-sky-200/65">{productOrders.filter((order) => order.fulfillmentMethod === "shipping").length} orders · scroll and ship</span></button>
+            <button onClick={() => openBatch("pickup")} disabled={productLoading} className="rounded-xl border border-amber-300/20 bg-amber-300/10 p-4 text-left transition hover:bg-amber-300/15 disabled:opacity-50"><span className="block text-sm font-semibold text-amber-100">View all pickups →</span><span className="mt-1 block text-xs text-amber-200/65">{productOrders.filter((order) => order.fulfillmentMethod === "pickup" && !processedOrderIds.has(order.orderId)).length} orders · scroll and prepare</span></button>
+            <button onClick={() => openBatch("shipping")} disabled={productLoading} className="rounded-xl border border-sky-300/20 bg-sky-300/10 p-4 text-left transition hover:bg-sky-300/15 disabled:opacity-50"><span className="block text-sm font-semibold text-sky-100">View all shipping →</span><span className="mt-1 block text-xs text-sky-200/65">{productOrders.filter((order) => order.fulfillmentMethod === "shipping" && !processedOrderIds.has(order.orderId)).length} orders · scroll and ship</span></button>
           </div>
-          <div className="mt-8"><h3 className="mb-4 font-semibold">Customer orders</h3>{productLoading ? <p className="text-sm text-slate-400">Loading orders…</p> : productOrders.length ? productOrders.map((order) => <button key={order.orderId} onClick={() => { const match = orders.find((item) => item.legacyResourceId === order.orderId); if (match) void openOrder(match, true); }} className="mb-3 flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/[.04] p-4 text-left hover:border-cyan-300/40"><span><span className="font-semibold text-white">{order.orderName}</span><span className="mt-1 block text-xs text-slate-400">{formatDate(order.date)} · {order.fulfillmentMethod === "pickup" ? "Pickup" : "Shipping"}</span></span><span className="text-sm font-semibold text-cyan-300">× {order.quantity} →</span></button>) : <Empty text="No unfulfilled orders for this product." />}</div>
+          <div className="mt-8"><h3 className="mb-4 font-semibold">Customer orders</h3>{productLoading ? <p className="text-sm text-slate-400">Loading orders…</p> : productOrders.filter((order) => !processedOrderIds.has(order.orderId)).length ? productOrders.filter((order) => !processedOrderIds.has(order.orderId)).map((order) => <button key={order.orderId} onClick={() => { const match = orders.find((item) => item.legacyResourceId === order.orderId); if (match) void openOrder(match, true); }} className="mb-3 flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/[.04] p-4 text-left hover:border-cyan-300/40"><span><span className="font-semibold text-white">{order.orderName}</span><span className="mt-1 block text-xs text-slate-400">{formatDate(order.date)} · {order.fulfillmentMethod === "pickup" ? "Pickup" : "Shipping"}</span></span><span className="text-sm font-semibold text-cyan-300">× {order.quantity} →</span></button>) : <Empty text="No unfulfilled orders for this product." />}</div>
         </aside>
       </div>}
-      {selectedProduct && batchMethod && <BatchOrderWorkspace productTitle={selectedProduct.title} method={batchMethod} orders={productOrders.filter((order) => order.fulfillmentMethod === batchMethod)} onBack={() => { setBatchMethod(null); void reloadProductOrders(selectedProduct.id); }} onUpdated={refresh} />}
+      {selectedProduct && batchMethod && <BatchOrderWorkspace productTitle={selectedProduct.title} method={batchMethod} orders={batchOrders} onBack={() => { setBatchMethod(null); void reloadProductOrders(selectedProduct.id); }} onUpdated={refresh} onProcessed={markProcessed} />}
 
     </main>
   );
