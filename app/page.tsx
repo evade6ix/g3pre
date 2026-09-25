@@ -1,784 +1,188 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-type Product = {
-  id: string;
-  title: string;
-  handle: string;
-  image: string | null;
-  rawDate: string | null;
-  orderCount: number;
-  revenue?: number | null;
-};
+type Product = { id: string; title: string; handle: string; image: string | null; rawDate: string | null; orderCount: number };
+type Item = { productId?: string | null; title: string; variantTitle?: string | null; sku?: string | null; quantity: number; image?: string | null };
+type Order = { id: string; legacyResourceId: string; adminUrl: string; name: string; createdAt: string; shippingMethod: string; fulfillmentMethod: "pickup" | "shipping"; items: Item[] };
+type Address = { name: string | null; company: string | null; address1: string | null; address2: string | null; city: string | null; province: string | null; zip: string | null; country: string | null; phone: string | null };
+type FulfillmentOrder = { id: string; status: string; deliveryMethod: { methodType: string } | null; supportedActions: { action: string }[] };
+type Detail = { id: string; name: string; createdAt: string; email: string | null; phone: string | null; note: string | null; tags: string[]; shippingAddress: Address | null; billingAddress: Address | null; fulfillmentOrders: { nodes: FulfillmentOrder[]; pageInfo: { hasNextPage: boolean } } };
+type ProductOrder = { orderId: string; orderName: string; date: string; quantity: number; fulfillmentMethod: string; shippingMethodLabel: string | null; items: Item[] };
 
-type OrderItem = {
-  title?: string | null;
-  variantTitle?: string | null;
-  sku?: string | null;
-  quantity?: number | null;
-  image?: string | null;
-};
-
-type Order = {
-  orderName: string;
-  date: string;
-  quantity: number;
-  adminUrl?: string | null;
-  fulfillmentMethod?: "shipping" | "pickup" | string | null;
-  shippingMethodLabel?: string | null;
-  revenue?: number | null;
-  items?: OrderItem[] | null;
-};
-
-type PreordersResponse = {
-  ok: boolean;
-  count: number;
-  products: Product[];
-};
-
-type ProductOrdersResponse = {
-  ok: boolean;
-  count: number;
-  orders: Order[];
-};
+const surface = "rounded-2xl border border-white/10 bg-[#151e2c] shadow-[0_12px_40px_rgba(0,0,0,.15)]";
 
 export default function HomePage() {
+  const [tab, setTab] = useState<"orders" | "products">("orders");
   const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const ordersCache = useRef<Record<string, Order[]>>({});
-  const ordersInFlight = useRef<Record<string, Promise<Order[]>>>({});
-  const latestRequestedProductId = useRef<string | null>(null);
-
-  const [selected, setSelected] = useState<Product | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [ordersLoading, setOrdersLoading] = useState(false);
-  const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
-
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const [sortMode, setSortMode] = useState<"release" | "orders">("release");
+  const [filter, setFilter] = useState<"all" | "pickup" | "shipping">("all");
+  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [detail, setDetail] = useState<Detail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState("");
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [productOrders, setProductOrders] = useState<ProductOrder[]>([]);
+  const [productLoading, setProductLoading] = useState(false);
+  const [trackingNumber, setTrackingNumber] = useState("");
+  const [carrier, setCarrier] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [success, setSuccess] = useState("");
 
-  useEffect(() => {
-    fetch("/api/preorders")
-      .then((res) => res.json())
-      .then((data: PreordersResponse) => {
-        setProducts(data.products || []);
-        setLoading(false);
-      })
-      .catch(() => {
-        setProducts([]);
-        setLoading(false);
-      });
-  }, []);
-
-  useEffect(() => {
-    if (!selected) return;
-
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    return () => {
-      document.body.style.overflow = previous;
-    };
-  }, [selected]);
-
-  async function loadOrders(productId: string, force = false) {
-    if (!force && ordersCache.current[productId]) {
-      return ordersCache.current[productId];
+  async function refresh() {
+    setLoading(true);
+    setError("");
+    try {
+      const [productResponse, orderResponse] = await Promise.all([fetch("/api/preorders"), fetch("/api/orders")]);
+      const [productData, orderData] = await Promise.all([productResponse.json(), orderResponse.json()]);
+      if (!productResponse.ok || !productData.ok) throw new Error(productData.error || "Could not load products");
+      if (!orderResponse.ok || !orderData.ok) throw new Error(orderData.error || "Could not load orders");
+      setProducts(productData.products || []);
+      setOrders(orderData.orders || []);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not load the dashboard");
+    } finally {
+      setLoading(false);
     }
+  }
 
-    if (!force) {
-      const inFlight = ordersInFlight.current[productId];
-      if (inFlight) {
-        return inFlight;
-      }
+  useEffect(() => { void refresh(); }, []);
+
+  const preorderIds = useMemo(() => new Set(products.map((p) => p.id)), [products]);
+  const preorderOrders = useMemo(() => orders.filter((order) => order.items.some((item) => item.productId && preorderIds.has(item.productId))), [orders, preorderIds]);
+  const visibleOrders = useMemo(() => preorderOrders.filter((order) => {
+    const q = search.trim().toLowerCase();
+    return (filter === "all" || filter === order.fulfillmentMethod) &&
+      (!q || order.name.toLowerCase().includes(q) || order.items.some((item) => `${item.title} ${item.sku || ""}`.toLowerCase().includes(q)));
+  }), [preorderOrders, search, filter]);
+  const visibleProducts = useMemo(() => products.filter((p) => `${p.title} ${p.handle} ${p.rawDate || ""}`.toLowerCase().includes(search.trim().toLowerCase())), [products, search]);
+  const pickupCount = preorderOrders.filter((o) => o.fulfillmentMethod === "pickup").length;
+  const unitCount = preorderOrders.reduce((sum, o) => sum + o.items.filter((item) => item.productId && preorderIds.has(item.productId)).reduce((n, item) => n + item.quantity, 0), 0);
+
+  async function openOrder(order: Order) {
+    setSelectedProduct(null);
+    setSelectedOrder(order);
+    setDetail(null);
+    setDetailError("");
+    setSuccess("");
+    setTrackingNumber("");
+    setCarrier("");
+    setDetailLoading(true);
+    try {
+      const response = await fetch(`/api/orders/${order.legacyResourceId}`);
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Unable to load order");
+      setDetail(data.order);
+    } catch (cause) {
+      setDetailError(cause instanceof Error ? cause.message : "Unable to load order");
+    } finally {
+      setDetailLoading(false);
     }
-
-    const request = fetch(
-      `/api/product-orders?productId=${encodeURIComponent(productId)}`,
-      {
-        method: "GET",
-        credentials: "same-origin",
-        cache: "no-store",
-      }
-    )
-      .then(async (res) => {
-        if (!res.ok) {
-          throw new Error("Failed to load orders");
-        }
-
-        const data: ProductOrdersResponse = await res.json();
-        const nextOrders = data.orders || [];
-        ordersCache.current[productId] = nextOrders;
-        return nextOrders;
-      })
-      .finally(() => {
-        delete ordersInFlight.current[productId];
-      });
-
-    ordersInFlight.current[productId] = request;
-    return request;
   }
 
   async function openProduct(product: Product) {
-    setSelected(product);
-    latestRequestedProductId.current = product.id;
-    setExpandedOrders({});
-
-    if (ordersCache.current[product.id]) {
-      setOrders(ordersCache.current[product.id]);
-      setOrdersLoading(false);
-      return;
-    }
-
-    setOrders([]);
-    setOrdersLoading(true);
-
+    setSelectedOrder(null);
+    setSelectedProduct(product);
+    setProductOrders([]);
+    setProductLoading(true);
     try {
-      const nextOrders = await loadOrders(product.id);
-
-      if (latestRequestedProductId.current === product.id) {
-        setOrders(nextOrders);
-      }
-    } catch {
-      if (latestRequestedProductId.current === product.id) {
-        setOrders([]);
-      }
+      const response = await fetch(`/api/product-orders?productId=${encodeURIComponent(product.id)}`);
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Unable to load product orders");
+      setProductOrders(data.orders || []);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to load product orders");
     } finally {
-      if (latestRequestedProductId.current === product.id) {
-        setOrdersLoading(false);
-      }
+      setProductLoading(false);
     }
   }
 
-  function closeDrawer() {
-    setSelected(null);
-    setOrders([]);
-    setOrdersLoading(false);
-    setExpandedOrders({});
-  }
-
-  function toggleOrderExpansion(orderKey: string) {
-    setExpandedOrders((prev) => ({
-      ...prev,
-      [orderKey]: !prev[orderKey],
-    }));
-  }
-
-  const filteredProducts = useMemo(() => {
-    const q = search.trim().toLowerCase();
-
-    const filtered = products.filter((product) => {
-      if (!q) return true;
-      return (
-        product.title.toLowerCase().includes(q) ||
-        product.handle.toLowerCase().includes(q) ||
-        (product.rawDate || "").toLowerCase().includes(q)
-      );
-    });
-
-    const sorted = [...filtered];
-
-    if (sortMode === "orders") {
-      sorted.sort((a, b) => {
-        if (b.orderCount !== a.orderCount) return b.orderCount - a.orderCount;
-        return safeDate(a.rawDate) - safeDate(b.rawDate);
+  async function performAction(action: "ready_for_pickup" | "ship") {
+    if (!selectedOrder || submitting) return;
+    setSubmitting(true);
+    setDetailError("");
+    setSuccess("");
+    try {
+      const response = await fetch(`/api/orders/${selectedOrder.legacyResourceId}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, trackingNumber, carrier }),
       });
-    } else {
-      sorted.sort((a, b) => safeDate(a.rawDate) - safeDate(b.rawDate));
-    }
-
-    return sorted;
-  }, [products, search, sortMode]);
-
-  const totalOpenOrders = useMemo(() => {
-    return filteredProducts.reduce((sum, product) => sum + product.orderCount, 0);
-  }, [filteredProducts]);
-
-  const topProduct = useMemo(() => {
-    if (!filteredProducts.length) return null;
-    return [...filteredProducts].sort((a, b) => b.orderCount - a.orderCount)[0];
-  }, [filteredProducts]);
-
-  const upcomingSoonest = useMemo(() => {
-    const upcoming = filteredProducts.filter((product) => safeDate(product.rawDate) >= Date.now() && safeDate(product.rawDate) !== Number.MAX_SAFE_INTEGER);
-    if (!upcoming.length) return null;
-    return [...upcoming].sort(
-      (a, b) => safeDate(a.rawDate) - safeDate(b.rawDate)
-    )[0];
-  }, [filteredProducts]);
-
-  const drawerTotalUnits = useMemo(() => {
-    return orders.reduce((sum, order) => sum + order.quantity, 0);
-  }, [orders]);
-
-  const drawerLatestOrderDate = useMemo(() => {
-    if (!orders.length) return null;
-    const sorted = [...orders].sort(
-      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-    );
-    return sorted[0]?.date ?? null;
-  }, [orders]);
-
-const pickupCount = useMemo(() => {
-  return orders.filter((order) => getOrderMethod(order) === "pickup").length;
-}, [orders]);
-
-const shippingCount = useMemo(() => {
-  return orders.filter((order) => getOrderMethod(order) === "shipping").length;
-}, [orders]);
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-slate-50">
-        <div className="mx-auto max-w-[1920px] px-6 py-8 sm:px-8 lg:px-10">
-          <div className="mb-12 flex flex-col items-center text-center">
-            <div className="h-3 w-32 animate-pulse rounded-full bg-slate-800" />
-            <div className="mt-5 h-12 w-[340px] max-w-full animate-pulse rounded-2xl bg-slate-800" />
-            <div className="mt-4 h-14 w-full max-w-2xl animate-pulse rounded-2xl bg-slate-800" />
-          </div>
-
-          <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-3">
-            {[...Array(3)].map((_, i) => (
-              <div
-                key={i}
-                className="h-28 animate-pulse rounded-2xl border border-slate-800 bg-slate-900"
-              />
-            ))}
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-            {[...Array(8)].map((_, i) => (
-              <div
-                key={i}
-                className="overflow-hidden rounded-2xl border border-slate-800"
-              >
-                <div className="h-56 animate-pulse bg-slate-800" />
-                <div className="space-y-2 border-t border-slate-800 p-4">
-                  <div className="h-5 w-3/4 animate-pulse rounded bg-slate-800" />
-                  <div className="h-4 w-1/2 animate-pulse rounded bg-slate-800" />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen overflow-x-hidden bg-slate-950 text-slate-50">
-      <div className="mx-auto max-w-[1920px] px-6 py-8 sm:px-8 lg:px-10">
-        <div className="mb-10 flex flex-col items-center text-center">
-          <h1 className="text-4xl font-semibold tracking-tight text-white sm:text-5xl">
-            Active Preorders
-          </h1>
-          <p className="mt-3 max-w-2xl text-sm text-slate-400 sm:text-base">
-            View "Unfulfilled" orders - does not work for "fulfilled"
-          </p>
-        </div>
-
-        <div className="mb-8 flex flex-col items-center gap-5">
-          <div className="w-full max-w-3xl">
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by product title, handle, or release date…"
-              className="h-14 w-full rounded-2xl border border-slate-700 bg-slate-900/70 px-5 text-base text-white placeholder:text-slate-500 outline-none transition focus:border-slate-500 focus:bg-slate-900"
-            />
-          </div>
-
-          <div className="flex flex-wrap justify-center gap-2">
-            {[
-              { mode: "release", label: "Release" },
-              { mode: "orders", label: "Demand" },
-            ].map(({ mode, label }) => (
-              <button
-                key={mode}
-                onClick={() => setSortMode(mode as "release" | "orders")}
-                className={`rounded-xl px-4 py-2.5 text-sm font-medium transition ${
-                  sortMode === mode
-                    ? "bg-slate-50 text-slate-950"
-                    : "border border-slate-700 text-slate-300 hover:bg-slate-800/50"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="mb-12 grid grid-cols-1 gap-6 md:grid-cols-3">
-          <MetricCard
-            label="Products"
-            value={filteredProducts.length.toString()}
-            context="In current view"
-          />
-          <MetricCard
-            label="Open Orders"
-            value={totalOpenOrders.toString()}
-            context={topProduct ? `Led by ${truncate(topProduct.title, 32)}` : "No products"}
-          />
-          <MetricCard
-            label="Next Release"
-            value={upcomingSoonest ? formatReleaseLabel(upcomingSoonest.rawDate) : "TBA"}
-            context={upcomingSoonest ? truncate(upcomingSoonest.title, 30) : "No product found"}
-          />
-        </div>
-
-        {filteredProducts.length === 0 ? (
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/50 px-8 py-16 text-center">
-            <div className="text-lg font-medium text-white">No products found</div>
-            <div className="mt-2 text-sm text-slate-400">
-              Adjust your search or switch the sort order.
-            </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-            {filteredProducts.map((product) => (
-              <button
-                key={product.id}
-                onClick={() => openProduct(product)}
-                className="group relative overflow-hidden rounded-2xl border border-slate-700 bg-gradient-to-br from-slate-900 to-slate-950 text-left outline-none transition hover:-translate-y-0.5 hover:border-slate-600 hover:shadow-lg focus:ring-2 focus:ring-slate-600 focus:ring-offset-2 focus:ring-offset-slate-950"
-              >
-                <div className="relative h-56 overflow-hidden bg-slate-800">
-                  <img
-                    src={product.image || "/favicon.ico"}
-                    alt={product.title}
-                    className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent" />
-
-                  <div className="absolute left-3 top-3 flex gap-2">
-                    <div className="rounded-full border border-slate-600/40 bg-slate-950/70 px-3 py-1.5 text-xs font-medium text-slate-200 backdrop-blur-sm">
-                      {formatReleaseLabel(product.rawDate)}
-                    </div>
-                  </div>
-
-                  <div className="absolute right-3 top-3">
-                    <div className="rounded-full border border-slate-600/40 bg-slate-950/70 px-3 py-1.5 text-xs font-medium text-slate-100 backdrop-blur-sm">
-                      {product.orderCount}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="border-t border-slate-700/60 p-5">
-                  <h3 className="line-clamp-2 text-base font-semibold leading-tight text-white">
-                    {product.title}
-                  </h3>
-
-                  <div className="mt-4 grid grid-cols-2 gap-3">
-                    <div>
-                      <div className="text-[11px] uppercase tracking-wider text-slate-500">
-                        Demand
-                      </div>
-                      <div className="mt-1 text-sm font-medium text-slate-200">
-                        {product.orderCount} {product.orderCount === 1 ? "order" : "orders"}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-[11px] uppercase tracking-wider text-slate-500">
-                        Handle
-                      </div>
-                      <div className="mt-1 truncate text-sm font-medium text-slate-200">
-                        {product.handle}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 flex items-center justify-end">
-                    <div className="shrink-0 rounded-xl border border-slate-600/40 bg-slate-800/50 px-3 py-2 text-xs font-medium text-slate-300 transition group-hover:bg-slate-700">
-                      View Orders
-                    </div>
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {selected && (
-        <div className="fixed inset-0 z-50">
-          <div
-            className="absolute inset-0 bg-black/40 backdrop-blur-sm transition"
-            onClick={closeDrawer}
-          />
-
-          <aside className="absolute right-0 top-0 h-full w-full max-w-2xl overflow-hidden border-l border-slate-700 bg-slate-900 shadow-2xl sm:max-w-xl">
-            <div className="flex h-full flex-col">
-              <div className="border-b border-slate-700/60 px-6 py-5">
-                <div className="mb-5 flex items-center justify-between">
-                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                    Product Details
-                  </div>
-                  <button
-                    onClick={closeDrawer}
-                    className="rounded-xl border border-slate-700 bg-slate-800/50 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-slate-700 hover:text-slate-200"
-                  >
-                    Close
-                  </button>
-                </div>
-
-                <div className="flex gap-5">
-                  <div className="h-24 w-24 shrink-0 overflow-hidden rounded-xl border border-slate-700 bg-slate-800">
-                    <img
-                      src={selected.image || "/favicon.ico"}
-                      alt={selected.title}
-                      className="h-full w-full object-cover"
-                    />
-                  </div>
-
-                  <div className="min-w-0 flex-1">
-                    <h2 className="text-2xl font-semibold text-white">
-                      {selected.title}
-                    </h2>
-
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <InfoChip label="Release" value={selected.rawDate || "N/A"} />
-                      <InfoChip
-                        label="Orders"
-                        value={`${selected.orderCount} ${
-                          selected.orderCount === 1 ? "order" : "orders"
-                        }`}
-                      />
-                      <InfoChip label="Units" value={`${drawerTotalUnits}`} />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex-1 overflow-y-auto">
-                <div className="border-b border-slate-700/60 px-6 py-6">
-                  <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-                    <DrawerMetricCard
-    label="Total units"
-    value={drawerTotalUnits.toString()}
-  />
-  <DrawerMetricCard
-    label="Order count"
-    value={orders.length.toString()}
-  />
-  <DrawerMetricCard
-    label="Shipping"
-    value={shippingCount.toString()}
-  />
-  <DrawerMetricCard
-    label="Pickup"
-    value={pickupCount.toString()}
-  />
-</div>
-
-                  <div className="mt-4">
-                    <DrawerMetricCard
-                      label="Latest order"
-                      value={drawerLatestOrderDate ? formatDate(drawerLatestOrderDate) : "—"}
-                    />
-                  </div>
-                </div>
-
-                <div className="px-6 py-6">
-                  <div className="mb-4 flex items-baseline justify-between">
-                    <h3 className="text-sm font-semibold text-white">Outstanding Orders</h3>
-                    <div className="text-xs font-medium text-slate-400">
-                      {orders.length} {orders.length === 1 ? "order" : "orders"}
-                    </div>
-                  </div>
-
-                  {ordersLoading ? (
-                    <div className="space-y-3">
-                      {[...Array(4)].map((_, i) => (
-                        <div
-                          key={i}
-                          className="h-20 animate-pulse rounded-xl border border-slate-700 bg-slate-800"
-                        />
-                      ))}
-                    </div>
-                  ) : orders.length === 0 ? (
-                    <div className="rounded-xl border border-slate-700 bg-slate-800/30 px-4 py-8 text-center">
-                      <div className="text-sm text-slate-400">
-                        No unfulfilled orders for this product.
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {orders.map((order, index) => {
-                        const orderKey = `${order.orderName}-${index}`;
-                        const expanded = !!expandedOrders[orderKey];
-                        const method = getOrderMethod(order);
-                        const hasItems = Array.isArray(order.items) && order.items.length > 0;
-
-                        return (
-                          <div
-                            key={orderKey}
-                            className="overflow-hidden rounded-xl border border-slate-700 bg-gradient-to-br from-slate-900/60 to-slate-950/60"
-                          >
-                            <div className="p-4">
-                              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <div className="text-sm font-semibold text-white">
-                                      {order.orderName}
-                                    </div>
-
-                                    <span
-  className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
-    method === "pickup"
-      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-      : "border-sky-500/30 bg-sky-500/10 text-sky-300"
-  }`}
->
-  {getOrderMethodLabel(order)}
-</span>
-
-                                    {order.adminUrl && (
-                                      <span className="rounded-full border border-slate-600/40 bg-slate-800/60 px-2 py-0.5 text-[10px] font-medium text-slate-300">
-                                        Shopify
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
-  <span>{formatDate(order.date)}</span>
-</div>
-                                </div>
-
-                                <div className="flex shrink-0 flex-wrap items-center gap-2">
-                                  {typeof order.revenue === "number" && (
-                                    <div className="rounded-xl border border-slate-700 bg-slate-800/50 px-3 py-2 text-right">
-                                      <div className="text-[10px] uppercase tracking-wider text-slate-500">
-                                        Order Value
-                                      </div>
-                                      <div className="mt-0.5 text-sm font-semibold text-white">
-                                        {formatMoney(order.revenue)}
-                                      </div>
-                                    </div>
-                                  )}
-
-                                  <div className="rounded-xl border border-slate-600/40 bg-slate-800/60 px-3 py-2 text-right">
-                                    <div className="text-[10px] uppercase tracking-wider text-slate-500">
-                                      Qty
-                                    </div>
-                                    <div className="mt-0.5 text-sm font-semibold text-white">
-                                      {order.quantity}
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div className="mt-4 flex flex-wrap items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => toggleOrderExpansion(orderKey)}
-                                  className="rounded-xl border border-slate-700 bg-slate-800/60 px-3 py-2 text-xs font-medium text-slate-200 transition hover:bg-slate-700"
-                                >
-                                  {expanded ? "Hide order items" : "View order items"}
-                                </button>
-
-                                {order.adminUrl && (
-                                  <a
-                                    href={order.adminUrl}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-600 hover:bg-slate-800"
-                                  >
-                                    Open in Shopify
-                                  </a>
-                                )}
-                              </div>
-                            </div>
-
-                            {expanded && (
-                              <div className="border-t border-slate-700/70 bg-slate-950/40 p-4">
-                                {hasItems ? (
-                                  <div className="space-y-3">
-                                    {(order.items || []).map((item, itemIndex) => (
-                                      <div
-                                        key={`${orderKey}-item-${itemIndex}`}
-                                        className="flex gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-3"
-                                      >
-                                        <div className="h-14 w-14 shrink-0 overflow-hidden rounded-md border border-slate-800 bg-slate-800">
-                                          {item.image ? (
-                                            <img
-                                              src={item.image}
-                                              alt={item.title || "Order item"}
-                                              className="h-full w-full object-cover"
-                                            />
-                                          ) : (
-                                            <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-500">
-                                              No image
-                                            </div>
-                                          )}
-                                        </div>
-
-                                        <div className="min-w-0 flex-1">
-                                          <div className="truncate text-sm font-medium text-white">
-                                            {item.title || "Untitled item"}
-                                          </div>
-
-                                          {item.variantTitle ? (
-                                            <div className="mt-1 truncate text-xs text-slate-400">
-                                              {item.variantTitle}
-                                            </div>
-                                          ) : null}
-
-                                          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
-                                            <span>Qty: {item.quantity ?? 0}</span>
-                                            {item.sku ? <span>SKU: {item.sku}</span> : null}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 px-4 py-6 text-sm text-slate-400">
-                                    No item-level details were returned for this order yet.
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </aside>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-  context,
-}: {
-  label: string;
-  value: string;
-  context: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-slate-700/60 bg-gradient-to-br from-slate-900/80 to-slate-950 p-6">
-      <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-        {label}
-      </div>
-      <div className="mt-3 text-3xl font-semibold text-white">{value}</div>
-      <div className="mt-2 text-sm text-slate-400">{context}</div>
-    </div>
-  );
-}
-
-function DrawerMetricCard({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-xl border border-slate-700/60 bg-slate-800/50 p-4">
-      <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-        {label}
-      </div>
-      <div className="mt-2 text-xl font-semibold text-white">{value}</div>
-    </div>
-  );
-}
-
-function InfoChip({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-full border border-slate-700/60 bg-slate-800/50 px-3 py-1.5 text-xs">
-      <span className="text-slate-400">{label}:</span>{" "}
-      <span className="font-medium text-slate-100">{value}</span>
-    </div>
-  );
-}
-
-function getOrderMethod(order: Order): "shipping" | "pickup" {
-  const methodLabel = getOrderMethodLabel(order)
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-
-  const isPickup =
-    methodLabel.includes("pickup in store") ||
-    methodLabel.includes("pick up in store") ||
-    methodLabel.includes("pickup") ||
-    methodLabel.includes("pick up") ||
-    methodLabel.includes("in-store") ||
-    methodLabel.includes("in store") ||
-    methodLabel.includes("local pickup") ||
-    methodLabel.includes("local_pickup") ||
-    methodLabel.includes("store pickup");
-
-  return isPickup ? "pickup" : "shipping";
-}
-function getOrderMethodLabel(order: Order): string {
-  return (
-    order.shippingMethodLabel?.trim() ||
-    order.fulfillmentMethod?.trim() ||
-    "Shipping"
-  );
-}
-
-function formatDate(value: string) {
-  try {
-    return new Date(value).toLocaleDateString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-  } catch {
-    return value;
-  }
-}
-
-function formatMoney(value: number) {
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(value || 0);
-}
-
-function formatReleaseLabel(value: string | null) {
-  if (!value) return "TBA";
-  return value;
-}
-
-function truncate(value: string, max: number) {
-  if (value.length <= max) return value;
-  return `${value.slice(0, max - 1)}…`;
-}
-
-function safeDate(rawDate: string | null) {
-  if (!rawDate) return Number.MAX_SAFE_INTEGER;
-
-  const cleaned = rawDate.replace(/(\d+)(st|nd|rd|th)/g, "$1");
-  const parsed = new Date(cleaned);
-
-  if (!isNaN(parsed.getTime())) {
-    return parsed.getTime();
-  }
-
-  const parts = cleaned.split(" ");
-  if (parts.length === 2) {
-    const fallback = new Date(`${parts[0]} 1, ${parts[1]}`);
-    if (!isNaN(fallback.getTime())) {
-      return fallback.getTime();
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Shopify could not update this order");
+      setDetail(data.order);
+      setSuccess(action === "ship" ? "Shipment created in Shopify. The customer was notified." : "Marked ready for pickup in Shopify. The customer was notified.");
+      await refresh();
+    } catch (cause) {
+      setDetailError(cause instanceof Error ? cause.message : "Shopify could not update this order");
+    } finally {
+      setSubmitting(false);
     }
   }
 
-  return Number.MAX_SAFE_INTEGER;
+  const openFulfillments = detail?.fulfillmentOrders.nodes.filter((fo) => fo.status === "OPEN") || [];
+  const blockedFulfillments = !!detail && (detail.fulfillmentOrders.pageInfo.hasNextPage || detail.fulfillmentOrders.nodes.some((fo) => !["OPEN", "CLOSED", "CANCELLED"].includes(fo.status)));
+  const canPickup = !!detail && !blockedFulfillments && openFulfillments.length > 0 && openFulfillments.every((fo) => fo.deliveryMethod?.methodType === "PICK_UP");
+  const canShip = !!detail && !blockedFulfillments && openFulfillments.length === 1 && openFulfillments[0].deliveryMethod?.methodType === "SHIPPING" && openFulfillments[0].supportedActions.some((a) => a.action === "CREATE_FULFILLMENT");
+
+  return (
+    <main className="min-h-screen bg-[#0b1220] text-slate-100">
+      <div className="mx-auto max-w-[1600px] px-5 pb-20 pt-7 md:px-9">
+        <header className="mb-9 flex flex-wrap items-center justify-between gap-5 border-b border-white/10 pb-7">
+          <div className="flex items-center gap-4"><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-cyan-300 text-xl font-black text-[#0b1220]">G3</div><div><p className="text-xs font-bold uppercase tracking-[.22em] text-cyan-300">Game 3 / Operations</p><h1 className="text-2xl font-semibold tracking-tight text-white">Preorder workspace</h1></div></div>
+          <button onClick={() => void refresh()} disabled={loading} className="rounded-xl border border-white/15 px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:bg-white/10 disabled:opacity-50">{loading ? "Syncing…" : "↻  Refresh orders"}</button>
+        </header>
+
+        <div className="mb-8"><p className="text-sm text-slate-400">A clear view of every open preorder, from arrival to pickup or shipment.</p><h2 className="mt-2 text-3xl font-semibold tracking-tight text-white md:text-4xl">Today’s queue</h2></div>
+        <section className="mb-8 grid gap-4 sm:grid-cols-3">
+          <Stat label="Open preorder orders" value={preorderOrders.length} hint="Across your preorder collection" />
+          <Stat label="Pickup queue" value={pickupCount} hint="Customer collection" />
+          <Stat label="Preorder units" value={unitCount} hint="Still unfulfilled" />
+        </section>
+
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex rounded-xl border border-white/10 bg-white/5 p-1"><button onClick={() => setTab("orders")} className={`rounded-lg px-5 py-2.5 text-sm font-semibold transition ${tab === "orders" ? "bg-cyan-300 text-[#0b1220]" : "text-slate-400 hover:text-white"}`}>Orders</button><button onClick={() => setTab("products")} className={`rounded-lg px-5 py-2.5 text-sm font-semibold transition ${tab === "products" ? "bg-cyan-300 text-[#0b1220]" : "text-slate-400 hover:text-white"}`}>Products</button></div>
+          <div className="flex w-full flex-wrap gap-3 sm:w-auto"><input aria-label="Search orders and products" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search order, product, SKU…" className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#151e2c] px-4 py-2.5 text-sm outline-none placeholder:text-slate-500 focus:border-cyan-300 sm:w-72" />{tab === "orders" && <select aria-label="Delivery method" value={filter} onChange={(event) => setFilter(event.target.value as typeof filter)} className="rounded-xl border border-white/10 bg-[#151e2c] px-3 py-2.5 text-sm text-slate-200"><option value="all">All methods</option><option value="pickup">Pickup</option><option value="shipping">Shipping</option></select>}</div>
+        </div>
+
+        {error && <div className="mb-5 rounded-xl border border-rose-400/30 bg-rose-400/10 p-4 text-sm text-rose-200">{error} <button onClick={() => void refresh()} className="ml-2 underline">Retry</button></div>}
+        {loading && !orders.length && !products.length ? <div className={`${surface} p-12 text-center text-slate-400`}>Loading your preorder queue from Shopify…</div> : tab === "orders" ? (
+          <section className={`${surface} overflow-hidden`}>
+            <div className="flex items-center justify-between border-b border-white/10 px-5 py-4"><h3 className="font-semibold text-white">Open orders</h3><span className="text-xs text-slate-400">{visibleOrders.length} shown</span></div>
+            {visibleOrders.length ? visibleOrders.map((order) => <button key={order.id} onClick={() => void openOrder(order)} className="flex w-full flex-wrap items-center gap-4 border-b border-white/[.06] px-5 py-4 text-left transition last:border-0 hover:bg-white/[.05] focus:bg-white/[.05] focus:outline-none sm:flex-nowrap">
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/[.06] text-lg text-slate-300">{order.fulfillmentMethod === "pickup" ? "⌂" : "↗"}</span>
+              <span className="min-w-0 flex-1"><span className="flex items-center gap-3"><strong className="text-white">{order.name}</strong><Badge method={order.fulfillmentMethod} /></span><span className="mt-1 block truncate text-sm text-slate-400">{order.items.map((item) => `${item.quantity}× ${item.title}`).join(" · ")}</span></span>
+              <span className="hidden shrink-0 text-right text-xs text-slate-400 md:block">{formatDate(order.createdAt)}<br /><span className="text-slate-500">{order.items.reduce((sum, item) => sum + item.quantity, 0)} units</span></span><span className="ml-auto text-cyan-300">→</span>
+            </button>) : <Empty text={search ? "No orders match your search." : "No open preorder orders in this view."} />}
+          </section>
+        ) : <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{visibleProducts.length ? visibleProducts.map((product) => <button key={product.id} onClick={() => void openProduct(product)} className={`${surface} flex min-h-36 gap-4 p-4 text-left transition hover:border-cyan-300/40 hover:bg-[#1b2737]`}><img src={product.image || "/favicon.ico"} alt="" className="h-24 w-24 shrink-0 rounded-xl bg-white/5 object-cover" /><span className="flex min-w-0 flex-col"><span className="line-clamp-2 font-semibold text-white">{product.title}</span><span className="mt-2 text-xs text-slate-400">{product.rawDate || "Release date TBA"}</span><span className="mt-auto text-sm font-medium text-cyan-300">{product.orderCount} units on open orders →</span></span></button>) : <div className={`${surface} col-span-full`}><Empty text="No products match your search." /></div>}</section>}
+      </div>
+
+      {selectedOrder && <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b1220]" role="dialog" aria-modal="true" aria-label={`Order ${selectedOrder.name}`}>
+        <div className="mx-auto max-w-[1500px] px-5 pb-20 pt-7 md:px-9">
+          <button onClick={() => setSelectedOrder(null)} className="mb-8 text-sm font-medium text-slate-400 hover:text-white">← Back to workspace</button>
+          <div className="mb-8 flex flex-wrap items-start justify-between gap-5"><div><p className="text-xs font-bold uppercase tracking-[.2em] text-cyan-300">Order workspace</p><h2 className="mt-2 text-4xl font-semibold tracking-tight text-white">{selectedOrder.name}</h2><p className="mt-2 text-sm text-slate-400">Placed {formatDate(selectedOrder.createdAt)} · {selectedOrder.shippingMethod}</p></div><a href={selectedOrder.adminUrl} target="_blank" rel="noreferrer" className="rounded-xl border border-white/15 px-4 py-2.5 text-sm text-slate-200 hover:bg-white/10">Open in Shopify ↗</a></div>
+          {detailError && <div className="mb-5 rounded-xl border border-rose-400/30 bg-rose-400/10 p-4 text-sm text-rose-200">{detailError}</div>}
+          {success && <div className="mb-5 rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-sm text-emerald-200">✓ {success}</div>}
+          {detailLoading ? <div className={`${surface} p-10 text-slate-400`}>Loading customer and fulfillment details…</div> : <div className="grid gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]">
+            <div className="space-y-5"><section className={`${surface} p-6`}><SectionTitle eyebrow="Items to fulfill" title={`${selectedOrder.items.reduce((n, item) => n + item.quantity, 0)} units in this order`} /><div className="mt-5 divide-y divide-white/10">{selectedOrder.items.map((item, index) => <div key={index} className="flex gap-4 py-4"><img src={item.image || "/favicon.ico"} alt="" className="h-16 w-16 rounded-lg bg-white/5 object-cover" /><div className="min-w-0 flex-1"><p className="font-medium text-white">{item.title}</p><p className="mt-1 text-sm text-slate-400">{item.variantTitle || "Default variant"}{item.sku ? ` · SKU ${item.sku}` : ""}</p></div><span className="font-semibold text-cyan-300">× {item.quantity}</span></div>)}</div></section>
+              <section className={`${surface} p-6`}><SectionTitle eyebrow="Fulfillment" title="Next action" />{!detail ? <p className="mt-4 text-sm text-slate-400">Order details are unavailable. You can manage it in Shopify.</p> : canPickup ? <div className="mt-5"><p className="mb-5 text-sm leading-6 text-slate-400">Items are ready at the counter? Marking them ready updates Shopify and sends its ready-for-pickup notification.</p><button disabled={submitting} onClick={() => void performAction("ready_for_pickup")} className="rounded-xl bg-cyan-300 px-5 py-3 text-sm font-bold text-[#0b1220] hover:bg-cyan-200 disabled:opacity-50">{submitting ? "Updating Shopify…" : "Mark ready for pickup"}</button></div> : canShip ? <div className="mt-5 space-y-4"><p className="text-sm leading-6 text-slate-400">Create the fulfillment in Shopify and email the tracking details to the customer.</p><div className="grid gap-3 sm:grid-cols-2"><label className="text-xs font-medium text-slate-400">Carrier (optional)<input value={carrier} onChange={(e) => setCarrier(e.target.value)} placeholder="FedEx, Canada Post…" className="mt-2 w-full rounded-xl border border-white/10 bg-[#0b1220] px-4 py-3 text-sm text-white outline-none focus:border-cyan-300" /></label><label className="text-xs font-medium text-slate-400">Tracking number<input value={trackingNumber} onChange={(e) => setTrackingNumber(e.target.value)} placeholder="Enter tracking number" className="mt-2 w-full rounded-xl border border-white/10 bg-[#0b1220] px-4 py-3 text-sm text-white outline-none focus:border-cyan-300" /></label></div><button disabled={submitting || !trackingNumber.trim()} onClick={() => void performAction("ship")} className="rounded-xl bg-cyan-300 px-5 py-3 text-sm font-bold text-[#0b1220] hover:bg-cyan-200 disabled:opacity-50">{submitting ? "Updating Shopify…" : "Mark shipped & notify customer"}</button></div> : <p className="mt-4 text-sm leading-6 text-slate-400">{openFulfillments.length ? "This order has multiple locations, a different delivery method, or a fulfillment hold. Complete it in Shopify." : "There are no open fulfillments for this order. It may already be ready, shipped, or fulfilled."}</p>}</section></div>
+            <div className="space-y-5"><section className={`${surface} p-6`}><SectionTitle eyebrow="Customer" title={detail?.shippingAddress?.name || detail?.billingAddress?.name || "Customer details"} /><div className="mt-5 space-y-4 text-sm"><DetailRow label="Email" value={detail?.email} link={detail?.email ? `mailto:${detail.email}` : undefined} /><DetailRow label="Phone" value={detail?.phone || detail?.shippingAddress?.phone || detail?.billingAddress?.phone} link={detail?.phone ? `tel:${detail.phone}` : undefined} /></div></section><section className={`${surface} p-6`}><SectionTitle eyebrow="Delivery" title={selectedOrder.fulfillmentMethod === "pickup" ? "In-store pickup" : "Shipping address"} /><AddressView address={detail?.shippingAddress} pickup={selectedOrder.fulfillmentMethod === "pickup"} /></section>{detail?.note && <section className={`${surface} p-6`}><SectionTitle eyebrow="Order note" title="Instructions" /><p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-300">{detail.note}</p></section>}{!!detail?.tags.length && <section className={`${surface} p-6`}><SectionTitle eyebrow="Labels" title="Shopify tags" /><div className="mt-4 flex flex-wrap gap-2">{detail.tags.map((tag) => <span key={tag} className="rounded-full bg-white/10 px-3 py-1 text-xs text-slate-300">{tag}</span>)}</div></section>}</div>
+          </div>}
+        </div>
+      </div>}
+
+      {selectedProduct && <div className="fixed inset-0 z-40 flex justify-end bg-black/65" role="dialog" aria-modal="true" aria-label={`Orders for ${selectedProduct.title}`}><button aria-label="Close product panel" onClick={() => setSelectedProduct(null)} className="flex-1" /><aside className="h-full w-full max-w-[680px] overflow-y-auto border-l border-white/10 bg-[#111a28] p-6 shadow-2xl md:p-8"><button onClick={() => setSelectedProduct(null)} className="mb-7 text-sm text-slate-400 hover:text-white">← Close panel</button><div className="flex gap-5"><img src={selectedProduct.image || "/favicon.ico"} alt="" className="h-24 w-24 rounded-xl object-cover" /><div><p className="text-xs font-bold uppercase tracking-[.2em] text-cyan-300">Product / Open orders</p><h2 className="mt-2 text-2xl font-semibold text-white">{selectedProduct.title}</h2><p className="mt-2 text-sm text-slate-400">{selectedProduct.rawDate || "Release date TBA"} · {selectedProduct.orderCount} units</p></div></div><div className="mt-8 border-t border-white/10 pt-6"><h3 className="mb-4 font-semibold">Customer orders</h3>{productLoading ? <p className="text-sm text-slate-400">Loading orders…</p> : productOrders.length ? productOrders.map((order) => <button key={order.orderName} onClick={() => { const match = orders.find((item) => item.legacyResourceId === order.orderId); if (match) void openOrder(match); }} className="mb-3 flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/[.04] p-4 text-left hover:border-cyan-300/40"><span><span className="font-semibold text-white">{order.orderName}</span><span className="mt-1 block text-xs text-slate-400">{formatDate(order.date)} · {order.fulfillmentMethod === "pickup" ? "Pickup" : "Shipping"}</span></span><span className="text-sm font-semibold text-cyan-300">× {order.quantity} →</span></button>) : <Empty text="No unfulfilled orders for this product." />}</div></aside></div>}
+    </main>
+  );
 }
+
+function Stat({ label, value, hint }: { label: string; value: number; hint: string }) { return <div className={`${surface} p-5`}><p className="text-xs font-semibold uppercase tracking-wider text-slate-400">{label}</p><p className="mt-3 text-3xl font-semibold text-white">{value.toLocaleString()}</p><p className="mt-1 text-xs text-slate-500">{hint}</p></div>; }
+function Badge({ method }: { method: "pickup" | "shipping" }) { return <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${method === "pickup" ? "bg-amber-300/10 text-amber-200" : "bg-sky-300/10 text-sky-200"}`}>{method === "pickup" ? "Pickup" : "Shipping"}</span>; }
+function SectionTitle({ eyebrow, title }: { eyebrow: string; title: string }) { return <div><p className="text-xs font-bold uppercase tracking-[.18em] text-cyan-300">{eyebrow}</p><h3 className="mt-2 text-xl font-semibold text-white">{title}</h3></div>; }
+function DetailRow({ label, value, link }: { label: string; value?: string | null; link?: string }) { return <div><p className="text-xs text-slate-500">{label}</p>{link && value ? <a href={link} className="mt-1 block break-all text-cyan-300 hover:underline">{value}</a> : <p className="mt-1 text-slate-200">{value || "Not provided"}</p>}</div>; }
+function AddressView({ address, pickup }: { address?: Address | null; pickup: boolean }) { if (pickup) return <p className="mt-4 text-sm text-slate-400">Customer will collect this order in store.</p>; if (!address) return <p className="mt-4 text-sm text-slate-400">No shipping address was provided.</p>; return <address className="mt-4 text-sm not-italic leading-7 text-slate-300">{address.name}<br />{address.company && <>{address.company}<br /></>}{address.address1}<br />{address.address2 && <>{address.address2}<br /></>}{[address.city, address.province, address.zip].filter(Boolean).join(", ")}<br />{address.country}</address>; }
+function Empty({ text }: { text: string }) { return <div className="p-12 text-center text-sm text-slate-400">{text}</div>; }
+function formatDate(value: string) { return new Date(value).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); }

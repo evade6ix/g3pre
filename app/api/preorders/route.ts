@@ -33,7 +33,7 @@ const collectionQuery = `
       products(first: 100, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         edges { node {
-          id title handle featuredImage { url }
+          id title handle featuredImage { url(transform: { maxWidth: 400, maxHeight: 400 }) }
           metafield(namespace: "${env.releaseDateNamespace}", key: "${env.releaseDateKey}") { value }
         } }
       }

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createSessionToken } from "../../../../lib/auth";
 
 const COOKIE_NAME = "preorder_dashboard_auth";
 
@@ -26,7 +27,7 @@ export async function POST(request: Request) {
 
     response.cookies.set({
       name: COOKIE_NAME,
-      value: "ok",
+      value: await createSessionToken(expected),
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",

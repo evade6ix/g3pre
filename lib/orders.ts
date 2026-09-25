@@ -39,8 +39,8 @@ const ordersQuery = `
         id legacyResourceId name createdAt
         shippingLine { title code deliveryCategory }
         lineItems(first: 100) { edges { node {
-          quantity title variantTitle image { url }
-          variant { sku image { url } }
+          quantity title variantTitle image { url(transform: { maxWidth: 160, maxHeight: 160 }) }
+          variant { sku image { url(transform: { maxWidth: 160, maxHeight: 160 }) } }
           product { id }
         } } }
       } }
@@ -70,5 +70,5 @@ async function scanUnfulfilledOrders(): Promise<OrderNode[]> {
 export const getUnfulfilledOrders = unstable_cache(
   scanUnfulfilledOrders,
   ["g3pre-unfulfilled-orders-v2"],
-  { revalidate: 60 }
+  { revalidate: 60, tags: ["g3pre-orders"] }
 );

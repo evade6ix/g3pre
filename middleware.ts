@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { validSessionToken } from "./lib/auth";
 
 const COOKIE_NAME = "preorder_dashboard_auth";
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname, searchParams } = request.nextUrl;
 
   // Allow static files and Next internals
@@ -18,13 +19,17 @@ export function middleware(request: NextRequest) {
   const cookie = request.cookies.get(COOKIE_NAME)?.value;
   const expected = process.env.PREORDER_APP_PASSWORD;
 
-  // If no password is set, don't block the site
+  // Customer details and fulfillment actions require configured authentication.
   if (!expected) {
+    return new NextResponse("Authentication is not configured", { status: 503 });
+  }
+
+  if (expected && await validSessionToken(cookie, expected)) {
     return NextResponse.next();
   }
 
-  if (cookie === "ok") {
-    return NextResponse.next();
+  if (pathname.startsWith("/api/")) {
+    return NextResponse.json({ ok: false, error: "Session expired. Sign in again." }, { status: 401 });
   }
 
   const loginUrl = request.nextUrl.clone();

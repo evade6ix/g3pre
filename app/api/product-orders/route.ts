@@ -46,6 +46,7 @@ export async function GET(req: Request) {
     const shopDomain = process.env.SHOPIFY_STORE_DOMAIN;
 
     const results: Array<{
+      orderId: string;
       orderName: string;
       date: string;
       quantity: number;
@@ -75,6 +76,7 @@ export async function GET(req: Request) {
         const delivery = getDeliveryInfo(order);
 
         results.push({
+          orderId: order.legacyResourceId,
           orderName: order.name,
           date: order.createdAt,
           quantity: matchedQuantity,

@@ -6,7 +6,7 @@ export async function shopifyAdminFetch<T>(
   variables?: Record<string, unknown>
 ): Promise<T> {
   const res = await fetch(
-    `https://${env.shopifyStoreDomain}/admin/api/2026-01/graphql.json`,
+    `https://${env.shopifyStoreDomain}/admin/api/2026-07/graphql.json`,
     {
       method: "POST",
       headers: {
