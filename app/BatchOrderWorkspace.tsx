@@ -39,12 +39,13 @@ function shippingGroups(orders: ProductOrder[]): ProductOrder[][] {
   return [...groups.values()];
 }
 
-export default function BatchOrderWorkspace({ productTitle, method, orders, allOrders, productIds, onBack, onUpdated, onProcessed }: {
+export default function BatchOrderWorkspace({ productTitle, method, orders, allOrders, productIds, processedOrderIds, onBack, onUpdated, onProcessed }: {
   productTitle: string;
   method: "pickup" | "shipping";
   orders: ProductOrder[];
   allOrders: CustomerOrder[];
   productIds: Set<string>;
+  processedOrderIds: Set<string>;
   onBack: () => void;
   onUpdated: () => Promise<void>;
   onProcessed: (orderId: string) => void;
@@ -57,20 +58,20 @@ export default function BatchOrderWorkspace({ productTitle, method, orders, allO
     <div className="mx-auto max-w-5xl px-5 pb-24 pt-7 md:px-9">
       <button onClick={onBack} className="mb-8 text-sm font-medium text-slate-400 hover:text-white">← Back to {productTitle} orders</button>
       <div className="mb-8 border-b border-white/10 pb-7"><p className="text-xs font-bold uppercase tracking-[.2em] text-cyan-300">Product fulfillment queue</p><h2 className="mt-2 text-3xl font-semibold text-white md:text-4xl">{method === "pickup" ? "All pickups" : "All shipments"}</h2><p className="mt-3 text-sm text-slate-400">{productTitle} · {orders.length} {orders.length === 1 ? "order" : "orders"}. Work down the page; each action updates that order in Shopify.</p></div>
-      {orders.length ? <div className="space-y-5">{groups.map((group, index) => group.length > 1 ? <CombinedShipment key={group[0].orderId} orders={group} customerCount={countFor(group[0])} onShowCustomer={() => showCustomer(group[0])} onUpdated={onUpdated} onProcessed={onProcessed} /> : <BatchCard key={group[0].orderId} order={group[0]} method={method} index={index + 1} total={groups.length} customerCount={countFor(group[0])} onShowCustomer={() => showCustomer(group[0])} onUpdated={onUpdated} onProcessed={onProcessed} />)}</div> : <div className="rounded-2xl border border-white/10 bg-[#151e2c] p-12 text-center text-sm text-slate-400">No {method === "pickup" ? "pickup" : "shipping"} orders for this product.</div>}
+      {orders.length ? <div className="space-y-5">{groups.map((group, index) => group.length > 1 ? <CombinedShipment key={group[0].orderId} orders={group} processedOrderIds={processedOrderIds} customerCount={countFor(group[0])} onShowCustomer={() => showCustomer(group[0])} onUpdated={onUpdated} onProcessed={onProcessed} /> : <BatchCard key={group[0].orderId} order={group[0]} method={method} index={index + 1} total={groups.length} processed={processedOrderIds.has(group[0].orderId)} customerCount={countFor(group[0])} onShowCustomer={() => showCustomer(group[0])} onUpdated={onUpdated} onProcessed={onProcessed} />)}</div> : <div className="rounded-2xl border border-white/10 bg-[#151e2c] p-12 text-center text-sm text-slate-400">No {method === "pickup" ? "pickup" : "shipping"} orders for this product.</div>}
     </div>
-    {customer && <CustomerOrdersDrawer identity={customer} orders={allOrders} productIds={productIds} onClose={() => setCustomer(null)} />}
+    {customer && <CustomerOrdersDrawer identity={customer} orders={allOrders} productIds={productIds} onProcessed={onProcessed} onUpdated={onUpdated} onClose={() => setCustomer(null)} />}
   </div>;
 }
 
-function CombinedShipment({ orders, customerCount, onShowCustomer, onUpdated, onProcessed }: { orders: ProductOrder[]; customerCount: number; onShowCustomer: () => void; onUpdated: () => Promise<void>; onProcessed: (orderId: string) => void }) {
+function CombinedShipment({ orders, processedOrderIds, customerCount, onShowCustomer, onUpdated, onProcessed }: { orders: ProductOrder[]; processedOrderIds: Set<string>; customerCount: number; onShowCustomer: () => void; onUpdated: () => Promise<void>; onProcessed: (orderId: string) => void }) {
   const [carrier, setCarrier] = useState("");
   const [trackingNumber, setTrackingNumber] = useState("");
   const [busy, setBusy] = useState(false);
   const [completed, setCompleted] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [warning, setWarning] = useState("");
-  const remaining = orders.filter((order) => !completed.includes(order.orderId));
+  const remaining = orders.filter((order) => !processedOrderIds.has(order.orderId) && !completed.includes(order.orderId));
   const address = orders[0].shippingAddress;
 
   async function shipTogether() {
@@ -109,7 +110,7 @@ function CustomerOrderButton({ count, onClick }: { count: number; onClick: () =>
   return <button onClick={onClick} className={`mt-3 rounded-lg px-3 py-2 text-xs font-semibold ${count > 1 ? "border border-amber-300/30 bg-amber-300/10 text-amber-200 hover:bg-amber-300/20" : "border border-white/10 text-slate-400 hover:bg-white/10"}`}>{count > 1 ? `${count} active preorders · View all →` : "Only open preorder · View →"}</button>;
 }
 
-function BatchCard({ order, method, index, total, customerCount, onShowCustomer, onUpdated, onProcessed }: { order: ProductOrder; method: "pickup" | "shipping"; index: number; total: number; customerCount: number; onShowCustomer: () => void; onUpdated: () => Promise<void>; onProcessed: (orderId: string) => void }) {
+function BatchCard({ order, method, index, total, processed, customerCount, onShowCustomer, onUpdated, onProcessed }: { order: ProductOrder; method: "pickup" | "shipping"; index: number; total: number; processed: boolean; customerCount: number; onShowCustomer: () => void; onUpdated: () => Promise<void>; onProcessed: (orderId: string) => void }) {
   const element = useRef<HTMLElement>(null);
   const [nearby, setNearby] = useState(false);
   const [detail, setDetail] = useState<Detail | null>(null);
@@ -153,7 +154,7 @@ function BatchCard({ order, method, index, total, customerCount, onShowCustomer,
     : !!detail && !blocked && open.length === 1 && open[0].deliveryMethod?.methodType === "SHIPPING" && open[0].supportedActions.some(({ action }) => action === "CREATE_FULFILLMENT");
 
   async function complete() {
-    if (submitting || !eligible) return;
+    if (submitting || processed || !eligible) return;
     setSubmitting(true);
     setError("");
     try {
@@ -181,6 +182,6 @@ function BatchCard({ order, method, index, total, customerCount, onShowCustomer,
     {loading ? <p className="py-7 text-sm text-slate-400">Loading customer and fulfillment details…</p> : <div className="grid gap-8 py-6 md:grid-cols-2"><div><p className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-500">Customer</p><p className="font-medium text-white">{address?.name || "Customer name unavailable"}</p><p className="mt-2 text-sm text-slate-300">{detail?.email || "No email"}</p><p className="mt-1 text-sm text-slate-300">{detail?.phone || address?.phone || "No phone"}</p>{method === "shipping" && address && <p className="mt-4 text-sm leading-6 text-slate-400">{address.address1}{address.address2 ? `, ${address.address2}` : ""}<br />{[address.city, address.province, address.zip].filter(Boolean).join(", ")}<br />{address.country}</p>}{detail?.note && <p className="mt-4 rounded-lg bg-white/5 p-3 text-sm text-slate-300">Note: {detail.note}</p>}</div><div><p className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-500">Items in order</p><div className="space-y-3">{order.items.map((item, itemIndex) => <div key={itemIndex} className="flex gap-3 text-sm"><img src={item.image || "/favicon.ico"} alt="" className="h-11 w-11 rounded-lg object-cover" /><span className="min-w-0 flex-1"><span className="block text-slate-200">{item.title}</span><span className="text-xs text-slate-500">{item.variantTitle || item.sku || ""}</span></span><span className="text-cyan-300">× {item.quantity}</span></div>)}</div></div></div>}
     {error && <div className="mb-4 rounded-xl border border-rose-400/30 bg-rose-400/10 p-3 text-sm text-rose-200">{error}</div>}
     {warning && <div className="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-200">{warning}</div>}
-    {success ? <p className="border-t border-white/10 pt-5 text-sm font-medium text-emerald-200">✓ {method === "pickup" ? "Ready for pickup" : "Shipment created"} in Shopify. Customer notification requested.</p> : detail && <div className="border-t border-white/10 pt-5">{eligible ? method === "pickup" ? <button disabled={submitting} onClick={() => void complete()} className="rounded-xl bg-cyan-300 px-5 py-3 text-sm font-bold text-[#0b1220] hover:bg-cyan-200 disabled:opacity-50">{submitting ? "Updating Shopify…" : "Mark ready for pickup"}</button> : <div className="flex flex-wrap items-end gap-3"><label className="text-xs font-medium text-slate-400">Carrier (optional)<input value={carrier} onChange={(event) => setCarrier(event.target.value)} placeholder="FedEx, Canada Post…" className="mt-2 block w-44 rounded-xl border border-white/10 bg-[#0b1220] px-3 py-3 text-sm text-white outline-none focus:border-cyan-300" /></label><label className="min-w-48 flex-1 text-xs font-medium text-slate-400">Tracking number<input value={trackingNumber} onChange={(event) => setTrackingNumber(event.target.value)} placeholder="Enter tracking number" className="mt-2 block w-full rounded-xl border border-white/10 bg-[#0b1220] px-3 py-3 text-sm text-white outline-none focus:border-cyan-300" /></label><button disabled={submitting || !trackingNumber.trim()} onClick={() => void complete()} className="rounded-xl bg-cyan-300 px-5 py-3 text-sm font-bold text-[#0b1220] hover:bg-cyan-200 disabled:opacity-50">{submitting ? "Updating Shopify…" : "Mark shipped"}</button></div> : <p className="text-sm text-slate-400">This order is already processed or has a fulfillment setup that needs Shopify Admin.</p>}</div>}
+    {processed || success ? <p className="border-t border-white/10 pt-5 text-sm font-medium text-emerald-200">✓ {method === "pickup" ? "Ready for pickup" : "Shipment created"} in Shopify. Customer notification requested.</p> : detail && <div className="border-t border-white/10 pt-5">{eligible ? method === "pickup" ? <button disabled={submitting} onClick={() => void complete()} className="rounded-xl bg-cyan-300 px-5 py-3 text-sm font-bold text-[#0b1220] hover:bg-cyan-200 disabled:opacity-50">{submitting ? "Updating Shopify…" : "Mark ready for pickup"}</button> : <div className="flex flex-wrap items-end gap-3"><label className="text-xs font-medium text-slate-400">Carrier (optional)<input value={carrier} onChange={(event) => setCarrier(event.target.value)} placeholder="FedEx, Canada Post…" className="mt-2 block w-44 rounded-xl border border-white/10 bg-[#0b1220] px-3 py-3 text-sm text-white outline-none focus:border-cyan-300" /></label><label className="min-w-48 flex-1 text-xs font-medium text-slate-400">Tracking number<input value={trackingNumber} onChange={(event) => setTrackingNumber(event.target.value)} placeholder="Enter tracking number" className="mt-2 block w-full rounded-xl border border-white/10 bg-[#0b1220] px-3 py-3 text-sm text-white outline-none focus:border-cyan-300" /></label><button disabled={submitting || !trackingNumber.trim()} onClick={() => void complete()} className="rounded-xl bg-cyan-300 px-5 py-3 text-sm font-bold text-[#0b1220] hover:bg-cyan-200 disabled:opacity-50">{submitting ? "Updating Shopify…" : "Mark shipped"}</button></div> : <p className="text-sm text-slate-400">This order is already processed or has a fulfillment setup that needs Shopify Admin.</p>}</div>}
   </section>;
 }
