@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { shopifyAdminFetch } from "../../../lib/shopify";
 import { env } from "../../../lib/env";
 import { getUnfulfilledOrders } from "../../../lib/orders";
+import { unstable_cache } from "next/cache";
 
 type ProductNode = {
   id: string;
@@ -18,12 +19,51 @@ type ProductNode = {
 type CollectionResponse = {
   collection: {
     products: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
       edges: {
         node: ProductNode;
       }[];
     };
-  };
+  } | null;
 };
+
+const collectionQuery = `
+  query GetCollection($id: ID!, $cursor: String) {
+    collection(id: $id) {
+      products(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        edges { node {
+          id title handle featuredImage { url }
+          metafield(namespace: "${env.releaseDateNamespace}", key: "${env.releaseDateKey}") { value }
+        } }
+      }
+    }
+  }
+`;
+
+const getCollectionProducts = unstable_cache(async (): Promise<ProductNode[]> => {
+  const products: ProductNode[] = [];
+  let cursor: string | null = null;
+  const collectionId = `gid://shopify/Collection/${env.preorderCollectionId}`;
+
+  do {
+    const data: CollectionResponse = await shopifyAdminFetch<CollectionResponse>(collectionQuery, {
+      id: collectionId,
+      cursor,
+    });
+    if (!data.collection) throw new Error("Preorder collection not found");
+
+    const page = data.collection.products;
+    products.push(...page.edges.map(({ node }) => node));
+    if (!page.pageInfo.hasNextPage) break;
+    if (!page.pageInfo.endCursor || page.pageInfo.endCursor === cursor) {
+      throw new Error("Shopify returned an incomplete collection page");
+    }
+    cursor = page.pageInfo.endCursor;
+  } while (true);
+
+  return products;
+}, ["g3pre-preorder-collection-v2"], { revalidate: 60 });
 
 function parseReleaseDate(dateStr: string | null): Date | null {
   if (!dateStr) return null;
@@ -44,35 +84,8 @@ function parseReleaseDate(dateStr: string | null): Date | null {
 
 export async function GET() {
   try {
-    const collectionQuery = `
-      query GetCollection($id: ID!) {
-        collection(id: $id) {
-          products(first: 100) {
-            edges {
-              node {
-                id
-                title
-                handle
-                featuredImage {
-                  url
-                }
-                metafield(
-                  namespace: "${env.releaseDateNamespace}"
-                  key: "${env.releaseDateKey}"
-                ) {
-                  value
-                }
-              }
-            }
-          }
-        }
-      }
-    `;
-
-    const [collectionData, allOrders] = await Promise.all([
-      shopifyAdminFetch<CollectionResponse>(collectionQuery, {
-        id: `gid://shopify/Collection/${env.preorderCollectionId}`,
-      }),
+    const [collectionProducts, allOrders] = await Promise.all([
+      getCollectionProducts(),
       getUnfulfilledOrders(),
     ]);
     const now = new Date();
@@ -90,9 +103,8 @@ export async function GET() {
       }
     }
 
-    const products = collectionData.collection.products.edges
-      .map((edge) => {
-        const p = edge.node;
+    const products = collectionProducts
+      .map((p) => {
         const parsedDate = parseReleaseDate(p.metafield?.value || null);
 
         return {
@@ -105,9 +117,9 @@ export async function GET() {
           orderCount: orderMap[p.id] || 0,
         };
       })
-      .filter((p) => p.releaseDate !== null)
-      .filter((p) => p.releaseDate!.getTime() >= now.getTime())
-      .sort((a, b) => a.releaseDate!.getTime() - b.releaseDate!.getTime());
+      .filter((p) => !p.releaseDate || p.releaseDate.getTime() >= now.getTime() || p.orderCount > 0)
+      .sort((a, b) => (a.releaseDate?.getTime() ?? Number.MAX_SAFE_INTEGER) -
+        (b.releaseDate?.getTime() ?? Number.MAX_SAFE_INTEGER));
 
     return NextResponse.json({
       ok: true,

@@ -52,10 +52,13 @@ async function scanUnfulfilledOrders(): Promise<OrderNode[]> {
   const orders: OrderNode[] = [];
   let cursor: string | null = null;
 
-  for (let page = 0; page < 20; page++) {
+  while (true) {
     const data: OrdersPageResponse = await shopifyAdminFetch<OrdersPageResponse>(ordersQuery, { cursor });
     orders.push(...data.orders.edges.map(({ node }) => node));
-    if (!data.orders.pageInfo.hasNextPage || !data.orders.pageInfo.endCursor) break;
+    if (!data.orders.pageInfo.hasNextPage) break;
+    if (!data.orders.pageInfo.endCursor || data.orders.pageInfo.endCursor === cursor) {
+      throw new Error("Shopify returned an incomplete orders page");
+    }
     cursor = data.orders.pageInfo.endCursor;
   }
 
@@ -66,6 +69,6 @@ async function scanUnfulfilledOrders(): Promise<OrderNode[]> {
 // so clicking a product doesn't start another full Shopify pagination scan.
 export const getUnfulfilledOrders = unstable_cache(
   scanUnfulfilledOrders,
-  ["g3pre-unfulfilled-orders-v1"],
+  ["g3pre-unfulfilled-orders-v2"],
   { revalidate: 60 }
 );

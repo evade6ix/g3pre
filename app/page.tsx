@@ -202,8 +202,9 @@ export default function HomePage() {
   }, [filteredProducts]);
 
   const upcomingSoonest = useMemo(() => {
-    if (!filteredProducts.length) return null;
-    return [...filteredProducts].sort(
+    const upcoming = filteredProducts.filter((product) => safeDate(product.rawDate) >= Date.now() && safeDate(product.rawDate) !== Number.MAX_SAFE_INTEGER);
+    if (!upcoming.length) return null;
+    return [...upcoming].sort(
       (a, b) => safeDate(a.rawDate) - safeDate(b.rawDate)
     )[0];
   }, [filteredProducts]);
