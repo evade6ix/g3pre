@@ -13,6 +13,7 @@ type OrderDetail = {
   id: string;
   name: string;
   createdAt: string;
+  cancelledAt: string | null;
   email: string | null;
   phone: string | null;
   note: string | null;
@@ -36,7 +37,7 @@ type Address = {
 
 const orderQuery = `query OrderWorkspace($id: ID!) {
   order(id: $id) {
-    id name createdAt email phone note tags
+    id name createdAt cancelledAt email phone note tags
     shippingAddress { name company address1 address2 city province zip country phone }
     billingAddress { name company address1 address2 city province zip country phone }
     fulfillmentOrders(first: 100) {
@@ -61,6 +62,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   try {
     const order = await loadOrder(id);
     if (!order) return NextResponse.json({ ok: false, error: "Order not found" }, { status: 404 });
+    if (order.cancelledAt) return NextResponse.json({ ok: false, error: "This order was cancelled in Shopify. Refresh the queue to remove it." }, { status: 409 });
     return NextResponse.json({ ok: true, order });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Unable to load order" }, { status: 500 });
@@ -75,6 +77,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const body = await request.json();
     const order = await loadOrder(id);
     if (!order) return NextResponse.json({ ok: false, error: "Order not found" }, { status: 404 });
+    if (order.cancelledAt) return NextResponse.json({ ok: false, error: "This order was cancelled in Shopify." }, { status: 409 });
     if (order.fulfillmentOrders.pageInfo.hasNextPage) {
       return NextResponse.json({ ok: false, error: "This order has too many fulfillment groups. Open it in Shopify." }, { status: 409 });
     }
