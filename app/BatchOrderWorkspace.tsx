@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import CustomerOrdersDrawer, { customerPreorders, type CustomerIdentity, type CustomerOrder } from "./CustomerOrdersDrawer";
 
 type ProductOrder = {
   orderId: string;
@@ -10,6 +11,7 @@ type ProductOrder = {
   fulfillmentMethod: string;
   customerName?: string | null;
   customerEmail?: string | null;
+  customerId?: string | null;
   shippingAddress?: { name: string | null; address1: string | null; address2: string | null; city: string | null; province: string | null; zip: string | null; country: string | null } | null;
   items: { title?: string | null; variantTitle?: string | null; sku?: string | null; quantity?: number | null; image?: string | null }[];
 };
@@ -37,25 +39,31 @@ function shippingGroups(orders: ProductOrder[]): ProductOrder[][] {
   return [...groups.values()];
 }
 
-export default function BatchOrderWorkspace({ productTitle, method, orders, onBack, onUpdated, onProcessed }: {
+export default function BatchOrderWorkspace({ productTitle, method, orders, allOrders, productIds, onBack, onUpdated, onProcessed }: {
   productTitle: string;
   method: "pickup" | "shipping";
   orders: ProductOrder[];
+  allOrders: CustomerOrder[];
+  productIds: Set<string>;
   onBack: () => void;
   onUpdated: () => Promise<void>;
   onProcessed: (orderId: string) => void;
 }) {
+  const [customer, setCustomer] = useState<CustomerIdentity | null>(null);
   const groups = method === "shipping" ? shippingGroups(orders) : orders.map((order) => [order]);
+  const showCustomer = (order: ProductOrder) => setCustomer(order);
+  const countFor = (order: ProductOrder) => customerPreorders(order, allOrders, productIds).length;
   return <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b1220] text-slate-100" role="dialog" aria-modal="true" aria-label={`${method} orders for ${productTitle}`}>
     <div className="mx-auto max-w-5xl px-5 pb-24 pt-7 md:px-9">
       <button onClick={onBack} className="mb-8 text-sm font-medium text-slate-400 hover:text-white">← Back to {productTitle} orders</button>
       <div className="mb-8 border-b border-white/10 pb-7"><p className="text-xs font-bold uppercase tracking-[.2em] text-cyan-300">Product fulfillment queue</p><h2 className="mt-2 text-3xl font-semibold text-white md:text-4xl">{method === "pickup" ? "All pickups" : "All shipments"}</h2><p className="mt-3 text-sm text-slate-400">{productTitle} · {orders.length} {orders.length === 1 ? "order" : "orders"}. Work down the page; each action updates that order in Shopify.</p></div>
-      {orders.length ? <div className="space-y-5">{groups.map((group, index) => group.length > 1 ? <CombinedShipment key={group[0].orderId} orders={group} onUpdated={onUpdated} onProcessed={onProcessed} /> : <BatchCard key={group[0].orderId} order={group[0]} method={method} index={index + 1} total={groups.length} onUpdated={onUpdated} onProcessed={onProcessed} />)}</div> : <div className="rounded-2xl border border-white/10 bg-[#151e2c] p-12 text-center text-sm text-slate-400">No {method === "pickup" ? "pickup" : "shipping"} orders for this product.</div>}
+      {orders.length ? <div className="space-y-5">{groups.map((group, index) => group.length > 1 ? <CombinedShipment key={group[0].orderId} orders={group} customerCount={countFor(group[0])} onShowCustomer={() => showCustomer(group[0])} onUpdated={onUpdated} onProcessed={onProcessed} /> : <BatchCard key={group[0].orderId} order={group[0]} method={method} index={index + 1} total={groups.length} customerCount={countFor(group[0])} onShowCustomer={() => showCustomer(group[0])} onUpdated={onUpdated} onProcessed={onProcessed} />)}</div> : <div className="rounded-2xl border border-white/10 bg-[#151e2c] p-12 text-center text-sm text-slate-400">No {method === "pickup" ? "pickup" : "shipping"} orders for this product.</div>}
     </div>
+    {customer && <CustomerOrdersDrawer identity={customer} orders={allOrders} productIds={productIds} onClose={() => setCustomer(null)} />}
   </div>;
 }
 
-function CombinedShipment({ orders, onUpdated, onProcessed }: { orders: ProductOrder[]; onUpdated: () => Promise<void>; onProcessed: (orderId: string) => void }) {
+function CombinedShipment({ orders, customerCount, onShowCustomer, onUpdated, onProcessed }: { orders: ProductOrder[]; customerCount: number; onShowCustomer: () => void; onUpdated: () => Promise<void>; onProcessed: (orderId: string) => void }) {
   const [carrier, setCarrier] = useState("");
   const [trackingNumber, setTrackingNumber] = useState("");
   const [busy, setBusy] = useState(false);
@@ -91,13 +99,17 @@ function CombinedShipment({ orders, onUpdated, onProcessed }: { orders: ProductO
   }
 
   return <section className="rounded-2xl border border-cyan-300/30 bg-[#151e2c] p-5 shadow-[0_12px_40px_rgba(0,0,0,.15)] md:p-7">
-    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-5"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-cyan-300">Combine into one package · {orders.length} Shopify orders</p><h3 className="mt-2 text-2xl font-semibold text-white">{orders[0].customerName}</h3><p className="mt-2 text-sm text-slate-300">{orders.map((order) => order.orderName).join(" · ")}</p></div><span className="rounded-full bg-cyan-300/10 px-3 py-1 text-xs font-semibold text-cyan-200">Same name & destination</span></div>
+    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-5"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-cyan-300">Combine into one package · {orders.length} Shopify orders</p><h3 className="mt-2 text-2xl font-semibold text-white">{orders[0].customerName}</h3><p className="mt-2 text-sm text-slate-300">{orders.map((order) => order.orderName).join(" · ")}</p><CustomerOrderButton count={customerCount} onClick={onShowCustomer} /></div><span className="rounded-full bg-cyan-300/10 px-3 py-1 text-xs font-semibold text-cyan-200">Same name & destination</span></div>
     <div className="grid gap-6 py-6 md:grid-cols-2"><div><p className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Ship to</p><p className="text-sm text-slate-200">{address?.name}<br />{[address?.address1, address?.address2].filter(Boolean).join(", ")}<br />{[address?.city, address?.province, address?.zip].filter(Boolean).join(", ")}<br />{address?.country}</p><p className="mt-3 text-sm text-slate-400">{orders[0].customerEmail}</p></div><div><p className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">All items to pack</p><div className="space-y-4">{orders.map((order) => <div key={order.orderId} className="rounded-xl bg-white/5 p-4"><p className="mb-3 font-semibold text-white">{order.orderName} {completed.includes(order.orderId) && <span className="text-sm text-emerald-300">✓ Shipped</span>}</p><div className="space-y-3">{order.items.map((item, index) => <div key={index} className="flex gap-3 text-sm"><img src={item.image || "/favicon.ico"} alt="" className="h-11 w-11 shrink-0 rounded-lg object-cover" /><span className="min-w-0 flex-1"><span className="block text-slate-200">{item.title}</span><span className="text-xs text-slate-500">{item.variantTitle || item.sku || ""}</span></span><span className="shrink-0 text-cyan-300">× {item.quantity}</span></div>)}</div></div>)}</div></div></div>
     <div className="border-t border-white/10 pt-5"><p className="mb-4 text-sm text-slate-400">Pack these orders together. Shopify keeps their order numbers separate; the same tracking number will be saved to each one.</p><div className="flex flex-wrap items-end gap-3"><label className="text-xs font-medium text-slate-400">Carrier (optional)<input value={carrier} onChange={(event) => setCarrier(event.target.value)} placeholder="FedEx, Canada Post…" className="mt-2 block w-44 rounded-xl border border-white/10 bg-[#0b1220] px-3 py-3 text-sm text-white outline-none focus:border-cyan-300" /></label><label className="min-w-48 flex-1 text-xs font-medium text-slate-400">Tracking number<input value={trackingNumber} onChange={(event) => setTrackingNumber(event.target.value)} placeholder="One number for this package" className="mt-2 block w-full rounded-xl border border-white/10 bg-[#0b1220] px-3 py-3 text-sm text-white outline-none focus:border-cyan-300" /></label><button disabled={busy || !trackingNumber.trim() || !remaining.length} onClick={() => void shipTogether()} className="rounded-xl bg-cyan-300 px-5 py-3 text-sm font-bold text-[#0b1220] disabled:opacity-50">{busy ? "Updating Shopify…" : remaining.length ? `Mark ${remaining.length} ${remaining.length === 1 ? "order" : "orders"} shipped` : "All orders shipped"}</button></div>{error && <p className="mt-4 rounded-xl bg-rose-400/10 p-3 text-sm text-rose-200">{error}</p>}{warning && <p className="mt-4 rounded-xl bg-amber-400/10 p-3 text-sm text-amber-200">{warning}</p>}</div>
   </section>;
 }
 
-function BatchCard({ order, method, index, total, onUpdated, onProcessed }: { order: ProductOrder; method: "pickup" | "shipping"; index: number; total: number; onUpdated: () => Promise<void>; onProcessed: (orderId: string) => void }) {
+function CustomerOrderButton({ count, onClick }: { count: number; onClick: () => void }) {
+  return <button onClick={onClick} className={`mt-3 rounded-lg px-3 py-2 text-xs font-semibold ${count > 1 ? "border border-amber-300/30 bg-amber-300/10 text-amber-200 hover:bg-amber-300/20" : "border border-white/10 text-slate-400 hover:bg-white/10"}`}>{count > 1 ? `${count} active preorders · View all →` : "Only open preorder · View →"}</button>;
+}
+
+function BatchCard({ order, method, index, total, customerCount, onShowCustomer, onUpdated, onProcessed }: { order: ProductOrder; method: "pickup" | "shipping"; index: number; total: number; customerCount: number; onShowCustomer: () => void; onUpdated: () => Promise<void>; onProcessed: (orderId: string) => void }) {
   const element = useRef<HTMLElement>(null);
   const [nearby, setNearby] = useState(false);
   const [detail, setDetail] = useState<Detail | null>(null);
@@ -165,7 +177,7 @@ function BatchCard({ order, method, index, total, onUpdated, onProcessed }: { or
 
   const address = detail?.shippingAddress || detail?.billingAddress;
   return <section ref={element} className="rounded-2xl border border-white/10 bg-[#151e2c] p-5 shadow-[0_12px_40px_rgba(0,0,0,.15)] md:p-7">
-    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-5"><div><p className="text-xs font-semibold uppercase tracking-[.18em] text-cyan-300">Order {index} of {total}</p><h3 className="mt-1 text-2xl font-semibold text-white">{order.orderName}</h3><p className="mt-1 text-xs text-slate-400">{new Date(order.date).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" })} · {order.quantity} of this product</p></div><span className={`rounded-full px-3 py-1 text-xs font-semibold ${success ? "bg-emerald-400/15 text-emerald-200" : "bg-amber-300/10 text-amber-200"}`}>{success ? "Updated in Shopify" : method === "pickup" ? "Pickup" : "Shipping"}</span></div>
+    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-5"><div><p className="text-xs font-semibold uppercase tracking-[.18em] text-cyan-300">Order {index} of {total}</p><h3 className="mt-1 text-2xl font-semibold text-white">{order.orderName}</h3><p className="mt-1 text-xs text-slate-400">{new Date(order.date).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" })} · {order.quantity} of this product</p><CustomerOrderButton count={customerCount} onClick={onShowCustomer} /></div><span className={`rounded-full px-3 py-1 text-xs font-semibold ${success ? "bg-emerald-400/15 text-emerald-200" : "bg-amber-300/10 text-amber-200"}`}>{success ? "Updated in Shopify" : method === "pickup" ? "Pickup" : "Shipping"}</span></div>
     {loading ? <p className="py-7 text-sm text-slate-400">Loading customer and fulfillment details…</p> : <div className="grid gap-8 py-6 md:grid-cols-2"><div><p className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-500">Customer</p><p className="font-medium text-white">{address?.name || "Customer name unavailable"}</p><p className="mt-2 text-sm text-slate-300">{detail?.email || "No email"}</p><p className="mt-1 text-sm text-slate-300">{detail?.phone || address?.phone || "No phone"}</p>{method === "shipping" && address && <p className="mt-4 text-sm leading-6 text-slate-400">{address.address1}{address.address2 ? `, ${address.address2}` : ""}<br />{[address.city, address.province, address.zip].filter(Boolean).join(", ")}<br />{address.country}</p>}{detail?.note && <p className="mt-4 rounded-lg bg-white/5 p-3 text-sm text-slate-300">Note: {detail.note}</p>}</div><div><p className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-500">Items in order</p><div className="space-y-3">{order.items.map((item, itemIndex) => <div key={itemIndex} className="flex gap-3 text-sm"><img src={item.image || "/favicon.ico"} alt="" className="h-11 w-11 rounded-lg object-cover" /><span className="min-w-0 flex-1"><span className="block text-slate-200">{item.title}</span><span className="text-xs text-slate-500">{item.variantTitle || item.sku || ""}</span></span><span className="text-cyan-300">× {item.quantity}</span></div>)}</div></div></div>}
     {error && <div className="mb-4 rounded-xl border border-rose-400/30 bg-rose-400/10 p-3 text-sm text-rose-200">{error}</div>}
     {warning && <div className="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-200">{warning}</div>}

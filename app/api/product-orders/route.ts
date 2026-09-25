@@ -55,6 +55,7 @@ export async function GET(req: Request) {
       shippingMethodLabel: string | null;
       customerName: string | null;
       customerEmail: string | null;
+      customerId: string | null;
       shippingAddress: OrderNode["shippingAddress"];
       items: Array<{
         title: string | null;
@@ -91,6 +92,7 @@ export async function GET(req: Request) {
           shippingMethodLabel: delivery.shippingMethodLabel,
           customerName: order.shippingAddress?.name || order.billingAddress?.name || null,
           customerEmail: order.email,
+          customerId: order.customer?.id || null,
           shippingAddress: order.shippingAddress,
           items: order.lineItems.edges.map(({ node }) => ({
             title: node.title || null,
