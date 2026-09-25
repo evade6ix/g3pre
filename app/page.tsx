@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import BatchOrderWorkspace from "./BatchOrderWorkspace";
 
 type Product = { id: string; title: string; handle: string; image: string | null; rawDate: string | null; orderCount: number };
 type Item = { productId?: string | null; title: string; variantTitle?: string | null; sku?: string | null; quantity: number; image?: string | null };
@@ -25,6 +26,7 @@ export default function HomePage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [batchMethod, setBatchMethod] = useState<"pickup" | "shipping" | null>(null);
   const [productOrders, setProductOrders] = useState<ProductOrder[]>([]);
   const [productLoading, setProductLoading] = useState(false);
   const [trackingNumber, setTrackingNumber] = useState("");
@@ -62,8 +64,8 @@ export default function HomePage() {
   const pickupCount = preorderOrders.filter((o) => o.fulfillmentMethod === "pickup").length;
   const unitCount = preorderOrders.reduce((sum, o) => sum + o.items.filter((item) => item.productId && preorderIds.has(item.productId)).reduce((n, item) => n + item.quantity, 0), 0);
 
-  async function openOrder(order: Order) {
-    setSelectedProduct(null);
+  async function openOrder(order: Order, fromProduct = false) {
+    if (!fromProduct) setSelectedProduct(null);
     setSelectedOrder(order);
     setDetail(null);
     setDetailError("");
@@ -84,6 +86,7 @@ export default function HomePage() {
   }
 
   async function openProduct(product: Product) {
+    setBatchMethod(null);
     setSelectedOrder(null);
     setSelectedProduct(product);
     setProductOrders([]);
@@ -97,6 +100,16 @@ export default function HomePage() {
       setError(cause instanceof Error ? cause.message : "Unable to load product orders");
     } finally {
       setProductLoading(false);
+    }
+  }
+
+  async function reloadProductOrders(productId: string) {
+    try {
+      const response = await fetch(`/api/product-orders?productId=${encodeURIComponent(productId)}`);
+      const data = await response.json();
+      if (response.ok && data.ok) setProductOrders(data.orders || []);
+    } catch {
+      // Keep the current list visible if Shopify is temporarily unavailable.
     }
   }
 
@@ -115,6 +128,7 @@ export default function HomePage() {
       setDetail(data.order);
       setSuccess(action === "ship" ? "Shipment created in Shopify. The customer was notified." : "Marked ready for pickup in Shopify. The customer was notified.");
       await refresh();
+      if (selectedProduct) await reloadProductOrders(selectedProduct.id);
     } catch (cause) {
       setDetailError(cause instanceof Error ? cause.message : "Shopify could not update this order");
     } finally {
@@ -162,7 +176,7 @@ export default function HomePage() {
 
       {selectedOrder && <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0b1220]" role="dialog" aria-modal="true" aria-label={`Order ${selectedOrder.name}`}>
         <div className="mx-auto max-w-[1500px] px-5 pb-20 pt-7 md:px-9">
-          <button onClick={() => setSelectedOrder(null)} className="mb-8 text-sm font-medium text-slate-400 hover:text-white">← Back to workspace</button>
+          <button onClick={() => setSelectedOrder(null)} className="mb-8 text-sm font-medium text-slate-400 hover:text-white">{selectedProduct ? `← Back to ${selectedProduct.title} orders` : "← Back to workspace"}</button>
           <div className="mb-8 flex flex-wrap items-start justify-between gap-5"><div><p className="text-xs font-bold uppercase tracking-[.2em] text-cyan-300">Order workspace</p><h2 className="mt-2 text-4xl font-semibold tracking-tight text-white">{selectedOrder.name}</h2><p className="mt-2 text-sm text-slate-400">Placed {formatDate(selectedOrder.createdAt)} · {selectedOrder.shippingMethod}</p></div><a href={selectedOrder.adminUrl} target="_blank" rel="noreferrer" className="rounded-xl border border-white/15 px-4 py-2.5 text-sm text-slate-200 hover:bg-white/10">Open in Shopify ↗</a></div>
           {detailError && <div className="mb-5 rounded-xl border border-rose-400/30 bg-rose-400/10 p-4 text-sm text-rose-200">{detailError}</div>}
           {success && <div className="mb-5 rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-sm text-emerald-200">✓ {success}</div>}
@@ -174,7 +188,20 @@ export default function HomePage() {
         </div>
       </div>}
 
-      {selectedProduct && <div className="fixed inset-0 z-40 flex justify-end bg-black/65" role="dialog" aria-modal="true" aria-label={`Orders for ${selectedProduct.title}`}><button aria-label="Close product panel" onClick={() => setSelectedProduct(null)} className="flex-1" /><aside className="h-full w-full max-w-[680px] overflow-y-auto border-l border-white/10 bg-[#111a28] p-6 shadow-2xl md:p-8"><button onClick={() => setSelectedProduct(null)} className="mb-7 text-sm text-slate-400 hover:text-white">← Close panel</button><div className="flex gap-5"><img src={selectedProduct.image || "/favicon.ico"} alt="" className="h-24 w-24 rounded-xl object-cover" /><div><p className="text-xs font-bold uppercase tracking-[.2em] text-cyan-300">Product / Open orders</p><h2 className="mt-2 text-2xl font-semibold text-white">{selectedProduct.title}</h2><p className="mt-2 text-sm text-slate-400">{selectedProduct.rawDate || "Release date TBA"} · {selectedProduct.orderCount} units</p></div></div><div className="mt-8 border-t border-white/10 pt-6"><h3 className="mb-4 font-semibold">Customer orders</h3>{productLoading ? <p className="text-sm text-slate-400">Loading orders…</p> : productOrders.length ? productOrders.map((order) => <button key={order.orderName} onClick={() => { const match = orders.find((item) => item.legacyResourceId === order.orderId); if (match) void openOrder(match); }} className="mb-3 flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/[.04] p-4 text-left hover:border-cyan-300/40"><span><span className="font-semibold text-white">{order.orderName}</span><span className="mt-1 block text-xs text-slate-400">{formatDate(order.date)} · {order.fulfillmentMethod === "pickup" ? "Pickup" : "Shipping"}</span></span><span className="text-sm font-semibold text-cyan-300">× {order.quantity} →</span></button>) : <Empty text="No unfulfilled orders for this product." />}</div></aside></div>}
+      {selectedProduct && <div className="fixed inset-0 z-40 flex justify-end bg-black/65" role="dialog" aria-modal="true" aria-label={`Orders for ${selectedProduct.title}`}>
+        <button aria-label="Close product panel" onClick={() => setSelectedProduct(null)} className="flex-1" />
+        <aside className="h-full w-full max-w-[680px] overflow-y-auto border-l border-white/10 bg-[#111a28] p-6 shadow-2xl md:p-8">
+          <button onClick={() => setSelectedProduct(null)} className="mb-7 text-sm text-slate-400 hover:text-white">← Close panel</button>
+          <div className="flex gap-5"><img src={selectedProduct.image || "/favicon.ico"} alt="" className="h-24 w-24 rounded-xl object-cover" /><div><p className="text-xs font-bold uppercase tracking-[.2em] text-cyan-300">Product / Open orders</p><h2 className="mt-2 text-2xl font-semibold text-white">{selectedProduct.title}</h2><p className="mt-2 text-sm text-slate-400">{selectedProduct.rawDate || "Release date TBA"} · {selectedProduct.orderCount} units</p></div></div>
+          <div className="mt-8 grid gap-3 border-t border-white/10 pt-6 sm:grid-cols-2">
+            <button onClick={() => setBatchMethod("pickup")} disabled={productLoading} className="rounded-xl border border-amber-300/20 bg-amber-300/10 p-4 text-left transition hover:bg-amber-300/15 disabled:opacity-50"><span className="block text-sm font-semibold text-amber-100">View all pickups →</span><span className="mt-1 block text-xs text-amber-200/65">{productOrders.filter((order) => order.fulfillmentMethod === "pickup").length} orders · scroll and prepare</span></button>
+            <button onClick={() => setBatchMethod("shipping")} disabled={productLoading} className="rounded-xl border border-sky-300/20 bg-sky-300/10 p-4 text-left transition hover:bg-sky-300/15 disabled:opacity-50"><span className="block text-sm font-semibold text-sky-100">View all shipping →</span><span className="mt-1 block text-xs text-sky-200/65">{productOrders.filter((order) => order.fulfillmentMethod === "shipping").length} orders · scroll and ship</span></button>
+          </div>
+          <div className="mt-8"><h3 className="mb-4 font-semibold">Customer orders</h3>{productLoading ? <p className="text-sm text-slate-400">Loading orders…</p> : productOrders.length ? productOrders.map((order) => <button key={order.orderId} onClick={() => { const match = orders.find((item) => item.legacyResourceId === order.orderId); if (match) void openOrder(match, true); }} className="mb-3 flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/[.04] p-4 text-left hover:border-cyan-300/40"><span><span className="font-semibold text-white">{order.orderName}</span><span className="mt-1 block text-xs text-slate-400">{formatDate(order.date)} · {order.fulfillmentMethod === "pickup" ? "Pickup" : "Shipping"}</span></span><span className="text-sm font-semibold text-cyan-300">× {order.quantity} →</span></button>) : <Empty text="No unfulfilled orders for this product." />}</div>
+        </aside>
+      </div>}
+      {selectedProduct && batchMethod && <BatchOrderWorkspace productTitle={selectedProduct.title} method={batchMethod} orders={productOrders.filter((order) => order.fulfillmentMethod === batchMethod)} onBack={() => { setBatchMethod(null); void reloadProductOrders(selectedProduct.id); }} onUpdated={refresh} />}
+
     </main>
   );
 }
