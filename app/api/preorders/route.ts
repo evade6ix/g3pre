@@ -3,6 +3,7 @@ import { shopifyAdminFetch } from "../../../lib/shopify";
 import { env } from "../../../lib/env";
 import { getUnfulfilledOrders } from "../../../lib/orders";
 import { unstable_cache } from "next/cache";
+import { remainingQuantity } from "../../../lib/line-items";
 
 type ProductNode = {
   id: string;
@@ -99,7 +100,7 @@ export async function GET() {
 
         if (!productId) continue;
 
-        orderMap[productId] = (orderMap[productId] || 0) + item.quantity;
+        orderMap[productId] = (orderMap[productId] || 0) + remainingQuantity(item);
       }
     }
 

@@ -27,6 +27,8 @@ export async function GET() {
           variantTitle: node.variantTitle || null,
           sku: node.variant?.sku || null,
           quantity: node.quantity,
+          currentQuantity: node.currentQuantity,
+          unfulfilledQuantity: node.unfulfilledQuantity,
           image: node.image?.url || node.variant?.image?.url || null,
         })),
       })),

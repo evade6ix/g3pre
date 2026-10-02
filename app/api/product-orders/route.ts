@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getUnfulfilledOrders, type OrderNode } from "../../../lib/orders";
+import { remainingQuantity } from "../../../lib/line-items";
 
 function getDeliveryInfo(order: OrderNode): {
   fulfillmentMethod: "shipping" | "pickup";
@@ -63,6 +64,8 @@ export async function GET(req: Request) {
         variantTitle: string | null;
         sku: string | null;
         quantity: number;
+        currentQuantity: number;
+        unfulfilledQuantity: number;
         image: string | null;
       }>;
     }> = [];
@@ -73,7 +76,7 @@ export async function GET(req: Request) {
       for (const itemEdge of order.lineItems.edges) {
         const item = itemEdge.node;
         if (item.product?.id === productId) {
-          matchedQuantity += item.quantity;
+          matchedQuantity += remainingQuantity(item);
         }
       }
 
@@ -101,6 +104,8 @@ export async function GET(req: Request) {
             variantTitle: node.variantTitle || null,
             sku: node.variant?.sku || null,
             quantity: node.quantity,
+            currentQuantity: node.currentQuantity,
+            unfulfilledQuantity: node.unfulfilledQuantity,
             image: node.image?.url || node.variant?.image?.url || null,
           })),
         });

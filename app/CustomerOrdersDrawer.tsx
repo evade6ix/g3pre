@@ -1,6 +1,8 @@
 "use client";
 
 import OrderComments from "./OrderComments";
+import ItemFulfillment from "./ItemFulfillment";
+import { remainingQuantity } from "../lib/line-items";
 
 import { useState } from "react";
 
@@ -14,7 +16,7 @@ export type CustomerOrder = {
   customerEmail?: string | null;
   shippingAddress?: { address1: string | null; address2?: string | null; city?: string | null; province?: string | null; zip: string | null; country?: string | null } | null;
   fulfillmentMethod: "pickup" | "shipping";
-  items: { productId?: string | null; title: string; variantTitle?: string | null; sku?: string | null; quantity: number; image?: string | null }[];
+  items: { productId?: string | null; title: string; variantTitle?: string | null; sku?: string | null; quantity: number; currentQuantity?: number; unfulfilledQuantity?: number; image?: string | null }[];
 };
 
 export type CustomerIdentity = Pick<CustomerOrder, "customerId" | "customerName" | "customerEmail" | "shippingAddress">;
@@ -29,7 +31,7 @@ export function sameCustomer(a: CustomerIdentity, b: CustomerIdentity) {
 }
 
 export function customerPreorders(identity: CustomerIdentity, orders: CustomerOrder[], productIds: Set<string>) {
-  return orders.filter((order) => sameCustomer(identity, order) && order.items.some((item) => item.productId && productIds.has(item.productId)));
+  return orders.filter((order) => sameCustomer(identity, order) && order.items.some((item) => item.productId && productIds.has(item.productId) && remainingQuantity(item) > 0));
 }
 
 export default function CustomerOrdersDrawer({ identity, orders, productIds, onClose, onProcessed, onUpdated }: {
@@ -88,9 +90,9 @@ export default function CustomerOrdersDrawer({ identity, orders, productIds, onC
       <p className="mt-2 text-sm text-slate-400">{combined ? `${combined.length} selected orders · ${completed.length} updated in Shopify` : `${matches.length} open ${matches.length === 1 ? "order" : "orders"} across all preorder products. Select the orders to work on together.`}</p>
       {!combined && <div className="mt-5 flex flex-wrap items-center gap-3"><button onClick={() => setSelected(matches.map((order) => order.legacyResourceId))} className="text-sm text-cyan-300 hover:underline">Select all</button><button onClick={() => setSelected([])} className="text-sm text-slate-400 hover:underline">Clear</button><button disabled={!selected.length} onClick={() => { setCombined(matches.filter((order) => selected.includes(order.legacyResourceId))); setCompleted([]); setWarnings([]); setError(""); }} className="ml-auto rounded-xl bg-cyan-300 px-4 py-2.5 text-sm font-bold text-[#0b1220] disabled:opacity-50">Create combined view ({selected.length}) →</button></div>}
       <div className="mt-7 space-y-4">{(combined || matches).map((order) => <section key={order.legacyResourceId} className={`rounded-2xl border p-5 ${combined && completed.includes(order.legacyResourceId) ? "border-emerald-400/30 bg-emerald-400/[.06]" : selected.includes(order.legacyResourceId) ? "border-cyan-300/40 bg-cyan-300/[.05]" : "border-white/10 bg-white/[.04]"}`}>
-        <div className="mb-4 flex items-center justify-between gap-3"><div className="flex items-center gap-3">{!combined && <input type="checkbox" aria-label={`Select ${order.name}`} checked={selected.includes(order.legacyResourceId)} onChange={() => setSelected((previous) => previous.includes(order.legacyResourceId) ? previous.filter((id) => id !== order.legacyResourceId) : [...previous, order.legacyResourceId])} className="h-5 w-5 accent-cyan-300" />}<div><h3 className="font-semibold text-white">{order.name} {completed.includes(order.legacyResourceId) && <span className="text-sm text-emerald-300">✓ Updated</span>}</h3><p className="mt-1 text-xs text-slate-400">{new Date(order.createdAt).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" })} · {order.fulfillmentMethod === "pickup" ? "Pickup" : "Shipping"}</p></div></div><span className="text-xs text-cyan-300">{order.items.reduce((n, item) => n + item.quantity, 0)} items</span></div>
+        <div className="mb-4 flex items-center justify-between gap-3"><div className="flex items-center gap-3">{!combined && <input type="checkbox" aria-label={`Select ${order.name}`} checked={selected.includes(order.legacyResourceId)} onChange={() => setSelected((previous) => previous.includes(order.legacyResourceId) ? previous.filter((id) => id !== order.legacyResourceId) : [...previous, order.legacyResourceId])} className="h-5 w-5 accent-cyan-300" />}<div><h3 className="font-semibold text-white">{order.name} {completed.includes(order.legacyResourceId) && <span className="text-sm text-emerald-300">✓ Updated</span>}</h3><p className="mt-1 text-xs text-slate-400">{new Date(order.createdAt).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" })} · {order.fulfillmentMethod === "pickup" ? "Pickup" : "Shipping"}</p></div></div><span className="text-xs text-cyan-300">{order.items.reduce((n, item) => n + remainingQuantity(item), 0)} remaining</span></div>
         {order.fulfillmentMethod === "shipping" && <p className="mb-4 text-xs text-slate-400">Ship to: {[order.shippingAddress?.address1, order.shippingAddress?.address2, order.shippingAddress?.city, order.shippingAddress?.province, order.shippingAddress?.zip, order.shippingAddress?.country].filter(Boolean).join(", ") || "Address unavailable"}</p>}
-        <div className="space-y-3">{order.items.map((item, index) => <div key={index} className="flex gap-3 text-sm"><img src={item.image || "/favicon.ico"} alt="" className="h-11 w-11 shrink-0 rounded-lg object-cover" /><span className="min-w-0 flex-1"><span className="block text-slate-200">{item.title}</span><span className="text-xs text-slate-500">{item.variantTitle || item.sku || ""}</span></span><span className="text-cyan-300">× {item.quantity}</span></div>)}</div>
+        <div className="space-y-3">{order.items.map((item, index) => <div key={index} className="flex gap-3 text-sm"><img src={item.image || "/favicon.ico"} alt="" className="h-11 w-11 shrink-0 rounded-lg object-cover" /><span className="min-w-0 flex-1"><span className="block text-slate-200">{item.title}</span><span className="text-xs text-slate-500">{item.variantTitle || item.sku || ""}</span><ItemFulfillment item={item} /></span><span className="shrink-0 text-right text-cyan-300">× {item.quantity} ordered</span></div>)}</div>
         <OrderComments orderId={order.legacyResourceId} hasTimelineComment={order.hasTimelineComment} />
       </section>)}</div>
       {combined && <div className="mt-7 space-y-5 border-t border-white/10 pt-6">

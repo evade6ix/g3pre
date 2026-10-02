@@ -6,6 +6,8 @@ export const READY_FOR_PICKUP_TAG = "g3pre-ready-for-pickup";
 
 export type OrderLineItemNode = {
   quantity: number;
+  currentQuantity: number;
+  unfulfilledQuantity: number;
   title?: string | null;
   variantTitle?: string | null;
   image?: { url: string } | null;
@@ -42,7 +44,7 @@ type OrdersPageResponse = {
 
 const ordersQuery = `
   query GetOrders($cursor: String) {
-    orders(first: 100, after: $cursor, query: "fulfillment_status:unfulfilled", sortKey: CREATED_AT, reverse: true) {
+    orders(first: 100, after: $cursor, query: "(fulfillment_status:unfulfilled OR fulfillment_status:partial)", sortKey: CREATED_AT, reverse: true) {
       pageInfo { hasNextPage endCursor }
       edges { node {
         id legacyResourceId name createdAt cancelledAt tags hasTimelineComment email customer { id }
@@ -50,7 +52,7 @@ const ordersQuery = `
         billingAddress { name }
         shippingLine { title code deliveryCategory }
         lineItems(first: 100) { edges { node {
-          quantity title variantTitle image { url(transform: { maxWidth: 160, maxHeight: 160 }) }
+          quantity currentQuantity unfulfilledQuantity title variantTitle image { url(transform: { maxWidth: 160, maxHeight: 160 }) }
           variant { sku image { url(transform: { maxWidth: 160, maxHeight: 160 }) } }
           product { id }
         } } }
@@ -82,6 +84,6 @@ async function scanUnfulfilledOrders(): Promise<OrderNode[]> {
 // so clicking a product doesn't start another full Shopify pagination scan.
 export const getUnfulfilledOrders = unstable_cache(
   scanUnfulfilledOrders,
-  ["g3pre-unfulfilled-orders-v7"],
+  ["g3pre-unfulfilled-orders-v8"],
   { revalidate: 60, tags: ["g3pre-orders"] }
 );
