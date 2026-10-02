@@ -20,6 +20,7 @@ export type OrderNode = {
   createdAt: string;
   cancelledAt: string | null;
   tags: string[];
+  hasTimelineComment: boolean;
   email: string | null;
   customer: { id: string } | null;
   shippingAddress: { name: string | null; address1: string | null; address2: string | null; city: string | null; province: string | null; zip: string | null; country: string | null } | null;
@@ -44,7 +45,7 @@ const ordersQuery = `
     orders(first: 100, after: $cursor, query: "fulfillment_status:unfulfilled", sortKey: CREATED_AT, reverse: true) {
       pageInfo { hasNextPage endCursor }
       edges { node {
-        id legacyResourceId name createdAt cancelledAt tags email customer { id }
+        id legacyResourceId name createdAt cancelledAt tags hasTimelineComment email customer { id }
         shippingAddress { name address1 address2 city province zip country }
         billingAddress { name }
         shippingLine { title code deliveryCategory }
@@ -81,6 +82,6 @@ async function scanUnfulfilledOrders(): Promise<OrderNode[]> {
 // so clicking a product doesn't start another full Shopify pagination scan.
 export const getUnfulfilledOrders = unstable_cache(
   scanUnfulfilledOrders,
-  ["g3pre-unfulfilled-orders-v6"],
+  ["g3pre-unfulfilled-orders-v7"],
   { revalidate: 60, tags: ["g3pre-orders"] }
 );

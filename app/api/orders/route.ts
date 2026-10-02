@@ -11,6 +11,7 @@ export async function GET() {
         legacyResourceId: order.legacyResourceId,
         adminUrl: `https://${process.env.SHOPIFY_STORE_DOMAIN}/admin/orders/${order.legacyResourceId}`,
         name: order.name,
+        hasTimelineComment: order.hasTimelineComment,
         customerId: order.customer?.id || null,
         customerName: order.shippingAddress?.name || order.billingAddress?.name || null,
         customerEmail: order.email,

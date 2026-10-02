@@ -19,6 +19,7 @@ type OrderDetail = {
   phone: string | null;
   note: string | null;
   tags: string[];
+  hasTimelineComment: boolean;
   shippingAddress: Address | null;
   billingAddress: Address | null;
   fulfillmentOrders: { nodes: FulfillmentOrder[]; pageInfo: { hasNextPage: boolean } };
@@ -38,7 +39,7 @@ type Address = {
 
 const orderQuery = `query OrderWorkspace($id: ID!) {
   order(id: $id) {
-    id name createdAt cancelledAt email phone note tags
+    id name createdAt cancelledAt email phone note tags hasTimelineComment
     shippingAddress { name company address1 address2 city province zip country phone }
     billingAddress { name company address1 address2 city province zip country phone }
     fulfillmentOrders(first: 100) {

@@ -48,6 +48,7 @@ export async function GET(req: Request) {
     const results: Array<{
       orderId: string;
       orderName: string;
+      hasTimelineComment: boolean;
       date: string;
       quantity: number;
       adminUrl: string | null;
@@ -82,6 +83,7 @@ export async function GET(req: Request) {
         results.push({
           orderId: order.legacyResourceId,
           orderName: order.name,
+          hasTimelineComment: order.hasTimelineComment,
           date: order.createdAt,
           quantity: matchedQuantity,
           adminUrl:
